@@ -226,6 +226,45 @@
       gap: 14px;
     }
 
+    .palette-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: center;
+      margin-bottom: 14px;
+    }
+
+    .palette-head h2 {
+      margin-bottom: 0;
+    }
+
+    .mode-switch {
+      display: inline-flex;
+      gap: 4px;
+      padding: 4px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.72);
+    }
+
+    .mode-button {
+      min-height: 38px;
+      border: 0;
+      border-radius: 999px;
+      padding: 0 13px;
+      background: transparent;
+      color: var(--muted);
+      font-weight: 900;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .mode-button.active {
+      background: var(--accent);
+      color: #fff;
+      box-shadow: 0 6px 14px rgba(12, 124, 89, 0.18);
+    }
+
     .tile-group {
       display: grid;
       grid-template-columns: 4.4rem minmax(0, 1fr);
@@ -241,6 +280,7 @@
 
     .tile-row,
     .hand,
+    .meld-list,
     .chips {
       display: flex;
       flex-wrap: wrap;
@@ -377,6 +417,58 @@
       padding: 16px;
       line-height: 1.75;
       color: var(--muted);
+    }
+
+    .zone-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 18px;
+    }
+
+    .meld-zone {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.58);
+      padding: 14px;
+    }
+
+    .meld-zone h3 {
+      margin: 0 0 10px;
+      font-size: 0.98rem;
+      letter-spacing: -0.02em;
+    }
+
+    .meld-card {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid rgba(228, 215, 200, 0.95);
+      border-radius: 16px;
+      padding: 7px 10px;
+      background: #fffdf8;
+      color: var(--ink);
+      cursor: pointer;
+      box-shadow: 0 6px 15px rgba(60, 39, 20, 0.07);
+      font-weight: 900;
+    }
+
+    .meld-card:hover {
+      border-color: rgba(181, 71, 71, 0.45);
+    }
+
+    .meld-label {
+      color: var(--accent-dark);
+      font-size: 0.83rem;
+      white-space: nowrap;
+    }
+
+    .draft-actions {
+      margin-top: 10px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
     }
 
     .result-table-wrap {
@@ -550,6 +642,23 @@
         gap: 7px;
       }
 
+      .palette-head {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .mode-switch {
+        width: 100%;
+      }
+
+      .mode-button {
+        flex: 1;
+      }
+
+      .zone-grid {
+        grid-template-columns: 1fr;
+      }
+
       .section-head {
         align-items: flex-start;
         flex-direction: column;
@@ -562,7 +671,7 @@
     <header class="hero">
       <p class="eyebrow">Riichi Mahjong Helper</p>
       <h1>テンパイなら、何点？</h1>
-      <p class="lead">13枚の手牌を選ぶと、テンパイしているかを判定し、和了牌ごとのロン点・ツモ点を表示します。第一版は門前手・副露なしで、役・符・ドラ枚数を自動計算に反映します。</p>
+      <p class="lead">手牌と副露・暗槓を選ぶと、テンパイしているかを判定し、和了牌ごとのロン点・ツモ点を表示します。副露時は必要な手牌枚数が自動で減り、役・符・ドラ枚数を計算に反映します。</p>
     </header>
 
     <div class="grid">
@@ -577,7 +686,7 @@
           <button class="button secondary" id="sample-hand" type="button">例題</button>
           <button class="button secondary" id="clear-hand" type="button">クリア</button>
         </div>
-        <p class="hint">表記: m=萬子、p=筒子、s=索子、z=字牌。字牌は 1z=東 2z=南 3z=西 4z=北 5z=白 6z=發 7z=中。赤5は 0m/0p/0s と入力できますが、ドラとしてはまだ数えません。</p>
+        <p class="hint">表記: m=萬子、p=筒子、s=索子、z=字牌。字牌は 1z=東 2z=南 3z=西 4z=北 5z=白 6z=發 7z=中。赤5は通常の5として扱います。ドラ枚数は計算条件で入力してください。</p>
         <p class="error" id="input-error" role="alert" hidden></p>
       </section>
 
@@ -615,16 +724,33 @@
       </section>
 
       <section class="panel" aria-labelledby="palette-title">
-        <h2 id="palette-title">牌をクリックして追加</h2>
+        <div class="palette-head">
+          <h2 id="palette-title">牌をクリックして追加</h2>
+          <div class="mode-switch" aria-label="入力先">
+            <button class="mode-button active" type="button" data-mode="hand">手牌</button>
+            <button class="mode-button" type="button" data-mode="open">副露</button>
+            <button class="mode-button" type="button" data-mode="closedKan">暗槓</button>
+          </div>
+        </div>
         <div id="tile-palette" class="palette"></div>
       </section>
 
       <section class="panel" aria-labelledby="hand-title">
         <div class="section-head">
           <h2 id="hand-title">現在の手牌</h2>
-          <div class="count"><span id="tile-count">0</span> / 13枚</div>
+          <div class="count"><span id="tile-count">0 / 13</span>枚</div>
         </div>
         <div id="hand-tiles" class="hand" aria-live="polite"></div>
+        <div class="zone-grid">
+          <div class="meld-zone">
+            <h3>現在の副露</h3>
+            <div id="open-melds" class="meld-list" aria-live="polite"></div>
+          </div>
+          <div class="meld-zone">
+            <h3>現在の暗槓</h3>
+            <div id="closed-kans" class="meld-list" aria-live="polite"></div>
+          </div>
+        </div>
       </section>
 
       <section class="panel" id="result" aria-live="polite"></section>
