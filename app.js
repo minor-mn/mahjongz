@@ -72,13 +72,7 @@
   ]);
   const GREEN_TILES = new Set([19, 20, 21, 23, 25, 32]);
 
-  const SAMPLE_HANDS = [
-    "123m123p123s45s33z",
-    "112233m445566p7s",
-    "19m19p19s1234567z",
-    "123m123p45s東東東77z",
-    "223344m223344p5s",
-  ];
+  const SAMPLE_GENERATION_ATTEMPTS = 1200;
 
   const state = {
     counts: Array(34).fill(0),
@@ -90,7 +84,6 @@
     openDraft: [],
     openDraftRed: [],
     closedKanDraft: [],
-    sampleIndex: 0,
     settings: {
       roundWind: 27,
       seatWind: 28,
@@ -106,6 +99,132 @@
 
   function cloneCounts(counts) {
     return counts.slice();
+  }
+
+  function shuffled(values) {
+    const result = values.slice();
+    for (let index = result.length - 1; index > 0; index -= 1) {
+      const swapIndex = Math.floor(Math.random() * (index + 1));
+      [result[index], result[swapIndex]] = [result[swapIndex], result[index]];
+    }
+    return result;
+  }
+
+  function randomChoice(values) {
+    return values[Math.floor(Math.random() * values.length)];
+  }
+
+  function sequenceTiles(suit, base) {
+    const offset = suit * 9;
+    return [offset + base, offset + base + 1, offset + base + 2];
+  }
+
+  function addTilesToCountsSafely(counts, tiles) {
+    for (const tile of tiles) {
+      if (counts[tile] >= 4) return false;
+    }
+    for (const tile of tiles) counts[tile] += 1;
+    return true;
+  }
+
+  function sequenceSupport(counts, suit, base) {
+    const [first, middle, last] = sequenceTiles(suit, base);
+    const complete = counts[first] > 0 && counts[middle] > 0 && counts[last] > 0;
+    const partial = (
+      (counts[first] > 0 && counts[middle] > 0)
+      || (counts[middle] > 0 && counts[last] > 0)
+      || (counts[first] > 0 && counts[last] > 0)
+    );
+    return { complete, partial };
+  }
+
+  function sanshokuPotentials(counts) {
+    const potentials = [];
+
+    for (let base = 0; base <= 6; base += 1) {
+      const supports = [0, 1, 2].map((suit) => sequenceSupport(counts, suit, base));
+      const supportCount = supports.filter((support) => support.partial).length;
+      const completeCount = supports.filter((support) => support.complete).length;
+      if (supportCount === 3 && completeCount < 3) {
+        potentials.push({ base, completeCount });
+      }
+    }
+
+    return potentials;
+  }
+
+  function canAdvanceFromDiscard(counts) {
+    for (let discard = 0; discard < 34; discard += 1) {
+      if (!counts[discard]) continue;
+
+      const afterDiscard = cloneCounts(counts);
+      afterDiscard[discard] -= 1;
+      const afterDiscardInfo = minShanten(afterDiscard);
+      if (afterDiscardInfo.values.normal !== 2) continue;
+
+      for (let draw = 0; draw < 34; draw += 1) {
+        if (afterDiscard[draw] >= 4) continue;
+        const afterDraw = addTile(afterDiscard, draw);
+        if (minShanten(afterDraw).values.normal === 1) return true;
+      }
+    }
+
+    return false;
+  }
+
+  function generateSanshokuExample() {
+    const fallback = parseNotation("123m12p12s11z69m78p9s");
+
+    for (let attempt = 0; attempt < SAMPLE_GENERATION_ATTEMPTS; attempt += 1) {
+      const counts = Array(34).fill(0);
+      const base = Math.floor(Math.random() * 7);
+      const suits = shuffled([0, 1, 2]);
+      const supportTiles = new Set();
+
+      if (!addTilesToCountsSafely(counts, sequenceTiles(suits[0], base))) continue;
+      sequenceTiles(suits[0], base).forEach((tile) => supportTiles.add(tile));
+
+      for (const suit of suits.slice(1)) {
+        const shape = randomChoice([
+          [base, base + 1],
+          [base + 1, base + 2],
+          [base, base + 2],
+        ]);
+        const tiles = shape.map((number) => suit * 9 + number);
+        if (!addTilesToCountsSafely(counts, tiles)) continue;
+        tiles.forEach((tile) => supportTiles.add(tile));
+      }
+
+      const pairCandidates = shuffled(
+        Array.from({ length: 7 }, (_, index) => 27 + index)
+          .concat(Array.from({ length: 27 }, (_, index) => index))
+          .filter((tile) => !supportTiles.has(tile) && counts[tile] <= 2),
+      );
+      const pair = pairCandidates.find((tile) => counts[tile] <= 2);
+      if (pair === undefined || !addTilesToCountsSafely(counts, [pair, pair])) continue;
+
+      const fillerCandidates = shuffled(
+        Array.from({ length: 34 }, (_, tile) => tile)
+          .filter((tile) => counts[tile] === 0 && !supportTiles.has(tile) && tile !== pair),
+      );
+      for (const tile of fillerCandidates) {
+        if (totalTiles(counts) >= 14) break;
+        counts[tile] += 1;
+      }
+      if (totalTiles(counts) !== 14) continue;
+
+      const info = minShanten(counts);
+      if (
+        info.shanten === 2
+        && info.values.normal === 2
+        && sanshokuPotentials(counts).length > 0
+        && canAdvanceFromDiscard(counts)
+      ) {
+        return counts;
+      }
+    }
+
+    return fallback;
   }
 
   function ceil100(value) {
@@ -2710,8 +2829,6 @@
     });
 
     sampleButton.addEventListener("click", () => {
-      const sample = SAMPLE_HANDS[state.sampleIndex % SAMPLE_HANDS.length];
-      state.sampleIndex += 1;
       state.openMelds = [];
       state.closedKans = [];
       state.doraIndicators = [];
@@ -2719,7 +2836,7 @@
       state.openDraftRed = [];
       state.closedKanDraft = [];
       state.redCounts = Array(34).fill(0);
-      state.counts = parseNotation(sample, { maxTiles: maximumHandSize() });
+      state.counts = generateSanshokuExample();
       renderAll({ syncNotation: true });
     });
 
@@ -2999,6 +3116,8 @@
     scorePattern,
     minShanten,
     analyzeExpectedValue,
+    generateSanshokuExample,
+    sanshokuPotentials,
     isKokushi,
     isChiitoitsu,
     decomposeStandard,
