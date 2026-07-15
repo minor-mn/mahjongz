@@ -1174,15 +1174,19 @@
     };
   }
 
+  function compareScorePriority(a, b) {
+    if ((a.yakumanCount || 0) !== (b.yakumanCount || 0)) {
+      return (a.yakumanCount || 0) - (b.yakumanCount || 0);
+    }
+    if (a.han !== b.han) return a.han - b.han;
+    if (a.total !== b.total) return a.total - b.total;
+    if (a.fu !== b.fu) return a.fu - b.fu;
+    return 0;
+  }
+
   function bestScore(scores) {
     if (!scores.length) return null;
-    return scores.slice().sort((a, b) => {
-      if (a.total !== b.total) return b.total - a.total;
-      if (a.yakumanCount !== b.yakumanCount) return b.yakumanCount - a.yakumanCount;
-      if (a.han !== b.han) return b.han - a.han;
-      if (a.fu !== b.fu) return b.fu - a.fu;
-      return 0;
-    })[0];
+    return scores.slice().sort((a, b) => compareScorePriority(b, a))[0];
   }
 
   function analyzeTenpai(counts, context = state.settings) {
@@ -1403,7 +1407,7 @@
   }
 
   function emptyExpectedValue() {
-    return { points: 0, wins: 0, peakScore: 0, peakRoute: null };
+    return { points: 0, wins: 0, peakScore: 0, peakHan: -1, peakRoute: null };
   }
 
   function valuePotential(counts, context, redCounts = []) {
@@ -1645,6 +1649,7 @@
             points: winning.tsumo.total,
             wins: 1,
             peakScore: winning.tsumo.total,
+            peakHan: winning.tsumo.han,
             peakRoute: winning.tsumo,
           };
         } else {
@@ -1664,8 +1669,12 @@
 
         result.points += probability * child.points;
         result.wins += probability * child.wins;
-        if (child.peakScore > result.peakScore) {
+        if (
+          child.peakRoute
+          && (!result.peakRoute || compareScorePriority(child.peakRoute, result.peakRoute) > 0)
+        ) {
           result.peakScore = child.peakScore;
+          result.peakHan = child.peakHan;
           result.peakRoute = child.peakRoute;
         }
       }
@@ -2314,7 +2323,7 @@
     note.innerHTML = `
       <strong>${formatShantenText(current.shanten)}の14枚を比較しています。</strong><br>
       ツモ限定・最大${result.maxDraws}回の簡易探索です。手牌にある牌だけを減らし、他家の捨て牌や場況は考慮しません。<br>
-      期待得点は、各ルートの <strong>和了確率 × ツモ時の受取点</strong> を比較した値です。シャンテン数を維持する手役上昇ルートも候補に残しますが、分岐を抑えるため有力な受け入れに絞っています。
+      期待得点は、各ルートの <strong>和了確率 × ツモ時の受取点</strong> を比較した値です。最高打点ルートの表示は<strong>翻数を優先し、同じ翻数なら受取点</strong>で選びます。シャンテン数を維持する手役上昇ルートも候補に残しますが、分岐を抑えるため有力な受け入れに絞っています。
     `;
     summary.append(note);
     section.append(summary);
