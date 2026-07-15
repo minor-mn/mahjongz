@@ -368,6 +368,10 @@
       margin-bottom: 14px;
     }
 
+    .section-head h2 {
+      margin: 0;
+    }
+
     .count {
       color: var(--accent-dark);
       font-weight: 900;
@@ -695,7 +699,10 @@
       </section>
 
       <section class="panel" aria-labelledby="settings-title">
-        <h2 id="settings-title">計算条件</h2>
+        <div class="section-head">
+          <h2 id="settings-title">計算条件</h2>
+          <button class="button secondary" id="copy-permalink" type="button">リンクをコピー</button>
+        </div>
         <div class="settings-grid">
           <div class="input-wrap">
             <label for="round-wind">場風</label>
@@ -720,7 +727,7 @@
             リーチ済み
           </label>
         </div>
-        <p class="hint">ロンは役がある場合だけ点数を出します。ツモは門前清自摸和を自動で加算します。表ドラ表示牌は、牌をクリックして最大4枚入力できます。</p>
+        <p class="hint">ロンは役がある場合だけ点数を出します。ツモは門前清自摸和を自動で加算します。表ドラ表示牌は、牌をクリックして最大4枚入力できます。URLでは <code>dora=4m9p</code>、<code>round=1z</code>、<code>seat=2z</code>、<code>riichi=1</code> を指定できます。省略時は東場・南家・リーチOFFです。</p>
       </section>
 
       <section class="panel" aria-labelledby="palette-title">

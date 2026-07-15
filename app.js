@@ -411,6 +411,16 @@
     return counts;
   }
 
+  function tilesFromCounts(counts) {
+    const tiles = [];
+    for (let tile = 0; tile < 34; tile += 1) {
+      for (let copy = 0; copy < (counts[tile] || 0); copy += 1) {
+        tiles.push(tile);
+      }
+    }
+    return tiles;
+  }
+
   function addTilesToCounts(counts, tiles) {
     for (const tile of tiles) counts[tile] += 1;
   }
@@ -540,6 +550,18 @@
       redTiles: [Boolean(red), false, false, false],
       open: false,
       concealed: true,
+      fixed: true,
+    };
+  }
+
+  function openKanFromTile(tile, red = false) {
+    return {
+      type: "kan",
+      tile,
+      tiles: [tile, tile, tile, tile],
+      redTiles: [Boolean(red), false, false, false],
+      open: true,
+      concealed: false,
       fixed: true,
     };
   }
@@ -2607,28 +2629,247 @@
     }
   }
 
+  function firstQueryValue(params, names) {
+    for (const name of names) {
+      if (params.has(name)) return params.get(name);
+    }
+    return null;
+  }
+
+  function parseWindParameter(value, fallback) {
+    if (value === null || value.trim() === "") return fallback;
+
+    const normalized = value.trim().replace(/[場家]$/, "");
+    const values = {
+      東: 27,
+      南: 28,
+      西: 29,
+      北: 30,
+      "1z": 27,
+      "2z": 28,
+      "3z": 29,
+      "4z": 30,
+      "27": 27,
+      "28": 28,
+      "29": 29,
+      "30": 30,
+    };
+    if (values[normalized] !== undefined) return values[normalized];
+    throw new Error(`風の指定「${value}」を読み取れません。東/南/西/北 または 1z〜4z を指定してください。`);
+  }
+
+  function parseRiichiParameter(value) {
+    if (value === null || value.trim() === "") return false;
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true", "on", "yes", "リーチ"].includes(normalized)) return true;
+    if (["0", "false", "off", "no"].includes(normalized)) return false;
+    throw new Error(`リーチの指定「${value}」を読み取れません。1 または 0 を指定してください。`);
+  }
+
+  function redFlagsFromNotation(notation, tiles) {
+    const redCounts = redCountsFromNotation(notation);
+    validateRedUsage(redCounts);
+    return tiles.map((tile) => {
+      if (!redCounts[tile]) return false;
+      redCounts[tile] -= 1;
+      return true;
+    });
+  }
+
+  function parseOpenMeldsParameter(value) {
+    if (value === null || value.trim() === "") return [];
+
+    return value.split(",").map((part) => part.trim()).filter(Boolean).map((part) => {
+      const counts = parseNotation(part, { maxTiles: 4 });
+      const tileCount = totalTiles(counts);
+      if (tileCount !== 3 && tileCount !== 4) {
+        throw new Error(`副露「${part}」は3枚または4枚で指定してください。`);
+      }
+      const tiles = tilesFromCounts(counts);
+      const redTiles = redFlagsFromNotation(part, tiles);
+      const meld = tileCount === 4
+        ? (tiles.every((tile) => tile === tiles[0])
+          ? openKanFromTile(tiles[0], redTiles[0])
+          : null)
+        : openMeldFromThree(tiles, redTiles);
+      if (!meld) {
+        throw new Error(`副露「${part}」は明順・明刻・明槓として読み取れません。`);
+      }
+      return meld;
+    });
+  }
+
+  function parseClosedKansParameter(value) {
+    if (value === null || value.trim() === "") return [];
+
+    return value.split(",").map((part) => part.trim()).filter(Boolean).map((part) => {
+      const counts = parseNotation(part, { maxTiles: 1 });
+      if (totalTiles(counts) !== 1) {
+        throw new Error(`暗槓「${part}」は牌1枚で指定してください。`);
+      }
+      const tiles = tilesFromCounts(counts);
+      const redTiles = redFlagsFromNotation(part, tiles);
+      return closedKanFromTile(tiles[0], redTiles[0]);
+    });
+  }
+
   function loadNotationFromQuery() {
     if (typeof window === "undefined" || !window.location) return "";
 
     const params = new URLSearchParams(window.location.search);
-    if (!params.has("p")) return "";
-
-    const notation = params.get("p") || "";
     try {
-      const nextCounts = parseNotation(notation, { maxTiles: maximumHandSize() });
+      const nextOpenMelds = parseOpenMeldsParameter(
+        firstQueryValue(params, ["open", "furo"]),
+      );
+      const nextClosedKans = parseClosedKansParameter(
+        firstQueryValue(params, ["kan", "ankan"]),
+      );
+      if (nextOpenMelds.length + nextClosedKans.length > 4) {
+        throw new Error("副露と暗槓は合計4組まで指定できます。");
+      }
+
+      const nextDoraNotation = firstQueryValue(params, ["dora", "d"]);
+      const nextDoraCounts = nextDoraNotation === null
+        ? Array(34).fill(0)
+        : parseNotation(nextDoraNotation, { maxTiles: 4 });
+      const nextDoraRedCounts = nextDoraNotation === null
+        ? Array(34).fill(0)
+        : redCountsFromNotation(nextDoraNotation);
+      if (totalTiles(nextDoraRedCounts) > 0) {
+        throw new Error("ドラ表示牌に赤牌は指定できません。");
+      }
+      const nextDoraIndicators = tilesFromCounts(nextDoraCounts);
+
+      const maxTiles = DRAW_HAND_SIZE - (nextOpenMelds.length + nextClosedKans.length) * 3;
+      const notation = params.has("p") ? params.get("p") || "" : "";
+      const nextCounts = parseNotation(notation, { maxTiles });
       const nextRedCounts = redCountsFromNotation(notation);
-      validateTileUsage(allUsedCounts({ extraClosedCounts: nextCounts }));
-      validateRedUsage(nextRedCounts);
+      const usedCounts = cloneCounts(nextCounts);
+      for (const meld of [...nextOpenMelds, ...nextClosedKans]) {
+        addTilesToCounts(usedCounts, meld.tiles);
+      }
+      addTilesToCounts(usedCounts, nextDoraIndicators);
+      validateTileUsage(usedCounts);
+      validateRedUsage(nextRedCounts, redCountsFromMelds([...nextOpenMelds, ...nextClosedKans]));
+
+      const roundWind = parseWindParameter(
+        firstQueryValue(params, ["round", "roundWind", "rw"]),
+        27,
+      );
+      const seatWind = parseWindParameter(
+        firstQueryValue(params, ["seat", "seatWind", "sw"]),
+        28,
+      );
+      const riichi = parseRiichiParameter(
+        firstQueryValue(params, ["riichi", "r"]),
+      );
+
       state.counts = nextCounts;
       state.redCounts = nextRedCounts;
+      state.openMelds = nextOpenMelds;
+      state.closedKans = nextClosedKans;
+      state.doraIndicators = nextDoraIndicators;
+      state.openDraft = [];
+      state.openDraftRed = [];
+      state.closedKanDraft = [];
+      state.settings.roundWind = roundWind;
+      state.settings.seatWind = seatWind;
+      state.settings.riichi = riichi;
+
+      const roundWindControl = document.getElementById("round-wind");
+      const seatWindControl = document.getElementById("seat-wind");
+      const riichiControl = document.getElementById("riichi");
+      if (roundWindControl) roundWindControl.value = String(roundWind);
+      if (seatWindControl) seatWindControl.value = String(seatWind);
+      if (riichiControl) riichiControl.checked = riichi;
+
       return "";
     } catch (error) {
-      return `URLのpパラメータを読み込めませんでした: ${error.message}`;
+      return `URLパラメータを読み込めませんでした: ${error.message}`;
     }
+  }
+
+  function buildPermalink() {
+    if (typeof window === "undefined" || !window.location) return "";
+
+    syncSettingsFromControls();
+    const url = new URL(window.location.href);
+    const params = new URLSearchParams();
+    const notation = toNotation(state.counts, state.redCounts);
+    const doraNotation = toNotation(tileCountsFromTiles(state.doraIndicators));
+    const openNotation = state.openMelds
+      .map((meld) => toNotation(
+        tileCountsFromTiles(meld.tiles),
+        redCountsFromMelds([meld]),
+      ))
+      .join(",");
+    const kanNotation = state.closedKans
+      .map((meld) => toNotation(
+        tileCountsFromTiles([meld.tile]),
+        redCountsFromMelds([meld]),
+      ))
+      .join(",");
+
+    if (notation) params.set("p", notation);
+    if (doraNotation) params.set("dora", doraNotation);
+    if (openNotation) params.set("open", openNotation);
+    if (kanNotation) params.set("kan", kanNotation);
+    if (state.settings.roundWind !== 27) {
+      params.set("round", `${state.settings.roundWind - 26}z`);
+    }
+    if (state.settings.seatWind !== 28) {
+      params.set("seat", `${state.settings.seatWind - 26}z`);
+    }
+    if (state.settings.riichi) params.set("riichi", "1");
+
+    url.search = params.toString();
+    url.hash = "";
+    return url.href;
+  }
+
+  async function writeClipboardText(text) {
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return;
+      } catch (error) {
+        // file:// などでClipboard APIが使えない場合は下の方法を試します。
+      }
+    }
+
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.append(textarea);
+    textarea.select();
+    const copied = document.execCommand("copy");
+    textarea.remove();
+    if (!copied) throw new Error("コピーできませんでした。");
+  }
+
+  function bindPermalinkControl() {
+    const button = document.getElementById("copy-permalink");
+    if (!button) return;
+
+    button.addEventListener("click", async () => {
+      const originalText = "リンクをコピー";
+      try {
+        await writeClipboardText(buildPermalink());
+        button.textContent = "コピーしました";
+      } catch (error) {
+        button.textContent = "コピーに失敗しました";
+      }
+      window.setTimeout(() => {
+        button.textContent = originalText;
+      }, 1800);
+    });
   }
 
   function init() {
     bindControls();
+    bindPermalinkControl();
     const queryError = loadNotationFromQuery();
     renderAll({ syncNotation: true });
     if (queryError) setError(queryError);
