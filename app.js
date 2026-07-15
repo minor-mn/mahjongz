@@ -98,6 +98,8 @@
     },
   };
 
+  let resultRenderToken = 0;
+
   function totalTiles(counts) {
     return counts.reduce((sum, count) => sum + count, 0);
   }
@@ -2448,10 +2450,42 @@
     return section;
   }
 
+  function needsExpectedValueCalculation() {
+    const total = totalTiles(state.counts);
+    const required = requiredHandSize();
+    const maximum = maximumHandSize();
+    return total === maximum && maximum !== required;
+  }
+
+  function renderResultLoading() {
+    const result = document.getElementById("result");
+    if (!result) return;
+
+    result.setAttribute("aria-busy", "true");
+    result.replaceChildren();
+
+    const title = document.createElement("h2");
+    title.textContent = "計算結果";
+    result.append(title);
+
+    const loading = document.createElement("div");
+    loading.className = "loading-card";
+    loading.setAttribute("role", "status");
+    loading.innerHTML = `
+      <div class="loading-spinner" aria-hidden="true"></div>
+      <div>
+        <strong>計算中です…</strong>
+        <p>12回のツモを確率計算しています。</p>
+      </div>
+    `;
+    result.append(loading);
+  }
+
   function renderResult() {
     const result = document.getElementById("result");
     if (!result) return;
 
+    result.setAttribute("aria-busy", "false");
     result.replaceChildren();
     const total = totalTiles(state.counts);
     const required = requiredHandSize();
@@ -2617,7 +2651,18 @@
     renderHand();
     renderMeldZones();
     renderDoraIndicators();
-    renderResult();
+
+    const renderToken = ++resultRenderToken;
+    if (!needsExpectedValueCalculation()) {
+      renderResult();
+      return;
+    }
+
+    renderResultLoading();
+    window.setTimeout(() => {
+      if (renderToken !== resultRenderToken) return;
+      renderResult();
+    }, 0);
   }
 
   function bindControls() {
