@@ -4,12 +4,14 @@
   const HAND_SIZE = 13;
   const DRAW_HAND_SIZE = 14;
   const EV_MAX_SHANTEN = 3;
-  const EV_MAX_DRAWS = 4;
-  const EV_BRANCH_LIMIT = 4;
-  const EV_VALUE_DETOUR_LIMIT = 1;
-  const EV_DRAW_IMPROVING_LIMIT = 4;
-  const EV_DRAW_SAME_LIMIT = 4;
-  const EV_DRAW_DETOUR_LIMIT = 2;
+  const EV_MAX_DRAWS = 12;
+  const EV_BRANCH_LIMIT = 3;
+  const EV_VALUE_DETOUR_LIMIT = 0;
+  const EV_DRAW_IMPROVING_LIMIT = 10;
+  const EV_DRAW_SAME_LIMIT = 10;
+  const EV_DRAW_DETOUR_LIMIT = 0;
+  const EV_VALUE_GAIN_THRESHOLD = 0;
+  const EV_WINNING_LIMIT = 12;
 
   const INPUT_MODES = {
     hand: "手牌",
@@ -1521,9 +1523,17 @@
     return [...selected, ...detours];
   }
 
-  function candidateDrawsForState(counts, redCounts, fixedCount, context, currentInfo) {
+  function candidateDrawsForState(
+    counts,
+    redCounts,
+    fixedCount,
+    context,
+    currentShanten,
+    allowValueDraws = true,
+  ) {
     const usedCounts = usedCountsForEv(counts, context);
     const usedRedCounts = usedRedCountsForEv(redCounts, context);
+    const currentPotential = valuePotential(counts, context, redCounts);
     const candidates = [];
 
     for (let tile = 0; tile < 34; tile += 1) {
@@ -1568,7 +1578,7 @@
           continue;
         }
 
-        const shantenDelta = info.shanten - currentInfo.shanten;
+        const shantenDelta = info.shanten - currentShanten;
         if (shantenDelta > 1) continue;
 
         candidates.push({
@@ -1585,13 +1595,21 @@
       }
     }
 
-    const winning = candidates.filter((candidate) => candidate.winning);
+    const winning = candidates
+      .filter((candidate) => candidate.winning)
+      .sort((a, b) => compareScorePriority(b.winning.tsumo, a.winning.tsumo))
+      .slice(0, EV_WINNING_LIMIT);
     const improving = candidates
       .filter((candidate) => candidate.priority === 3)
       .sort((a, b) => b.potential - a.potential)
       .slice(0, EV_DRAW_IMPROVING_LIMIT);
     const maintaining = candidates
-      .filter((candidate) => candidate.priority === 2)
+      .filter((candidate) => (
+        allowValueDraws
+        &&
+        candidate.priority === 2
+        && candidate.potential > currentPotential + EV_VALUE_GAIN_THRESHOLD
+      ))
       .sort((a, b) => b.potential - a.potential)
       .slice(0, EV_DRAW_SAME_LIMIT);
     const detours = candidates
@@ -1604,11 +1622,12 @@
 
   function createExpectedValueEvaluator(context, fixedCount) {
     const memo = new Map();
+    const discardMemo = new Map();
 
-    const evaluateState = (counts, redCounts, drawsLeft) => {
+    const evaluateState = (counts, redCounts, drawsLeft, valueOpen = true) => {
       if (drawsLeft <= 0) return emptyExpectedValue();
 
-      const key = `${drawsLeft}:${countsKey(counts)}:${countsKey(redCounts)}`;
+      const key = `${drawsLeft}:${valueOpen ? "1" : "0"}:${countsKey(counts)}:${countsKey(redCounts)}`;
       if (memo.has(key)) return memo.get(key);
 
       const info = minShanten(counts, fixedCount);
@@ -1636,12 +1655,15 @@
         redCounts,
         fixedCount,
         context,
-        info,
+        info.shanten,
+        valueOpen,
       );
+      let coveredProbability = 0;
 
       for (const candidate of drawCandidates) {
         const { tile, remaining, winning } = candidate;
         const probability = remaining / totalRemaining;
+        coveredProbability += probability;
 
         let child;
         if (winning?.tsumo) {
@@ -1654,17 +1676,29 @@
           };
         } else {
           const afterDraw = candidate.afterDraw;
-          const discardCandidates = candidateDiscardsAfterDraw(
-            afterDraw,
-            candidate.redCounts,
-            drawsLeft,
-            fixedCount,
-            context,
-          );
+          const discardKey = `${drawsLeft}:${countsKey(afterDraw)}:${countsKey(candidate.redCounts)}`;
+          let discardCandidates = discardMemo.get(discardKey);
+          if (!discardCandidates) {
+            discardCandidates = candidateDiscardsAfterDraw(
+              afterDraw,
+              candidate.redCounts,
+              drawsLeft,
+              fixedCount,
+              context,
+            );
+            discardMemo.set(discardKey, discardCandidates);
+          }
           const bestCandidate = discardCandidates[0];
-          child = bestCandidate
-            ? evaluateState(bestCandidate.counts, bestCandidate.redCounts, drawsLeft - 1)
-            : emptyExpectedValue();
+          if (bestCandidate) {
+            child = evaluateState(
+              bestCandidate.counts,
+              bestCandidate.redCounts,
+              drawsLeft - 1,
+              false,
+            );
+          } else {
+            child = emptyExpectedValue();
+          }
         }
 
         result.points += probability * child.points;
@@ -1676,6 +1710,21 @@
           result.peakScore = child.peakScore;
           result.peakHan = child.peakHan;
           result.peakRoute = child.peakRoute;
+        }
+      }
+
+      const omittedProbability = Math.max(0, 1 - coveredProbability);
+      if (omittedProbability > 0 && drawsLeft > 1) {
+        const noChange = evaluateState(counts, redCounts, drawsLeft - 1, valueOpen);
+        result.points += omittedProbability * noChange.points;
+        result.wins += omittedProbability * noChange.wins;
+        if (
+          noChange.peakRoute
+          && (!result.peakRoute || compareScorePriority(noChange.peakRoute, result.peakRoute) > 0)
+        ) {
+          result.peakScore = noChange.peakScore;
+          result.peakHan = noChange.peakHan;
+          result.peakRoute = noChange.peakRoute;
         }
       }
 
@@ -1696,8 +1745,8 @@
       return { currentShanten, options: [], skipped: true, maxDraws };
     }
 
-    const evaluateState = createExpectedValueEvaluator(context, fixedCount);
     const options = [];
+    const evaluateState = createExpectedValueEvaluator(context, fixedCount);
     const redCounts = cloneCounts(
       context.concealedRedCounts || context.redCounts || Array(34).fill(0),
     );
@@ -1755,7 +1804,12 @@
         }
 
         const expected = afterInfo.shanten <= maxShanten + 1
-          ? evaluateState(afterDiscard, afterRedCounts, maxDraws)
+          ? evaluateState(
+            afterDiscard,
+            afterRedCounts,
+            maxDraws,
+            afterInfo.shanten <= currentShanten.shanten,
+          )
           : emptyExpectedValue();
 
         options.push({
@@ -2322,7 +2376,7 @@
     note.className = "note-card";
     note.innerHTML = `
       <strong>${formatShantenText(current.shanten)}の14枚を比較しています。</strong><br>
-      ツモ限定・最大${result.maxDraws}回の簡易探索です。手牌にある牌だけを減らし、他家の捨て牌や場況は考慮しません。<br>
+      ツモ限定・最大${result.maxDraws}回、牌姿をまとめて再利用する確率DPで計算しています。非有効牌は空振りとしてまとめ、手牌・副露・ドラ表示牌以外の場況は考慮しません。シャンテン数を維持する打点上昇牌も、最初の有効ツモまで候補に残します。<br>
       期待得点は、各ルートの <strong>和了確率 × ツモ時の受取点</strong> を比較した値です。最高打点ルートの表示は<strong>翻数を優先し、同じ翻数なら受取点</strong>で選びます。シャンテン数を維持する手役上昇ルートも候補に残しますが、分岐を抑えるため有力な受け入れに絞っています。
     `;
     summary.append(note);
