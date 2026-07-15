@@ -2,12 +2,28 @@
   "use strict";
 
   const HAND_SIZE = 13;
+  const DRAW_HAND_SIZE = 14;
+  const EV_MAX_SHANTEN = 3;
+  const EV_MAX_DRAWS = 4;
+  const EV_BRANCH_LIMIT = 4;
+  const EV_VALUE_DETOUR_LIMIT = 1;
+  const EV_DRAW_IMPROVING_LIMIT = 4;
+  const EV_DRAW_SAME_LIMIT = 4;
+  const EV_DRAW_DETOUR_LIMIT = 2;
 
   const INPUT_MODES = {
     hand: "手牌",
     open: "副露",
     closedKan: "暗槓",
+    dora: "ドラ表示牌",
   };
+
+  const RED_TILE_IMAGES = {
+    4: "images/manzu1/p_msa_1.gif",
+    13: "images/pinzu1/p_psa_1.gif",
+    22: "images/sozu1/p_ssa_1.gif",
+  };
+  const RED_TILE_INDICES = new Set(Object.keys(RED_TILE_IMAGES).map(Number));
 
   const TILE_DEFS = [
     ...Array.from({ length: 9 }, (_, i) => ({
@@ -64,17 +80,19 @@
 
   const state = {
     counts: Array(34).fill(0),
+    redCounts: Array(34).fill(0),
     inputMode: "hand",
     openMelds: [],
     closedKans: [],
+    doraIndicators: [],
     openDraft: [],
+    openDraftRed: [],
     closedKanDraft: [],
     sampleIndex: 0,
     settings: {
       roundWind: 27,
       seatWind: 28,
       riichi: false,
-      dora: 0,
     },
   };
 
@@ -99,6 +117,59 @@
 
   function tileNumber(index) {
     return index % 9 + 1;
+  }
+
+  function isRedTileIndex(index) {
+    return RED_TILE_INDICES.has(index);
+  }
+
+  function tileDefinition(index, red = false) {
+    const tile = TILE_DEFS[index];
+    if (!red || !isRedTileIndex(index)) return tile;
+
+    return {
+      ...tile,
+      id: `0${tile.id.slice(1)}`,
+      short: `赤${tile.short}`,
+      name: `赤${tile.name}`,
+      image: RED_TILE_IMAGES[index],
+    };
+  }
+
+  function doraTileFromIndicator(indicator) {
+    if (indicator < 27) {
+      const offset = indicator - (indicator % 9);
+      return offset + ((indicator % 9 + 1) % 9);
+    }
+
+    if (indicator >= 27 && indicator <= 30) {
+      return indicator === 30 ? 27 : indicator + 1;
+    }
+
+    if (indicator >= 31 && indicator <= 33) {
+      return indicator === 33 ? 31 : indicator + 1;
+    }
+
+    return indicator;
+  }
+
+  function doraBreakdownForCounts(counts, context) {
+    const indicatorDora = Array.isArray(context.doraIndicators)
+      ? context.doraIndicators.reduce((total, indicator) => (
+        total + (counts[doraTileFromIndicator(indicator)] || 0)
+      ), 0)
+      : Math.max(0, Math.min(12, Math.trunc(Number(context.dora) || 0)));
+    const redDora = RED_TILE_INDICES.size > 0 && Array.isArray(context.redCounts)
+      ? [...RED_TILE_INDICES].reduce((total, index) => (
+        total + Math.min(counts[index] || 0, context.redCounts[index] || 0)
+      ), 0)
+      : 0;
+
+    return { indicatorDora, redDora, total: indicatorDora + redDora };
+  }
+
+  function doraCountForCounts(counts, context) {
+    return doraBreakdownForCounts(counts, context).total;
   }
 
   function isSuitTile(index) {
@@ -131,6 +202,10 @@
 
   function canStartSequence(index) {
     return isSuitTile(index) && index % 9 <= 6;
+  }
+
+  function canStartTwoSidedTaatsu(index) {
+    return isSuitTile(index) && index % 9 <= 7;
   }
 
   function tileIndexFromSuitDigit(suit, digit) {
@@ -193,7 +268,7 @@
     return honorMap.has(char) ? honorMap.get(char) : -1;
   }
 
-  function parseNotation(text, { maxTiles = HAND_SIZE } = {}) {
+  function parseNotation(text, { maxTiles = DRAW_HAND_SIZE } = {}) {
     const counts = Array(34).fill(0);
     const normalized = normalizeInput(text);
     const digits = [];
@@ -257,13 +332,44 @@
     return counts;
   }
 
-  function toNotation(counts) {
+  function redCountsFromNotation(text) {
+    const redCounts = Array(34).fill(0);
+    const normalized = normalizeInput(text);
+    const digits = [];
+
+    const flushDigits = (suit) => {
+      for (const digit of digits) {
+        if (digit !== 0) continue;
+        const index = tileIndexFromSuitDigit(suit, digit);
+        if (index >= 0 && isRedTileIndex(index)) redCounts[index] += 1;
+      }
+      digits.length = 0;
+    };
+
+    for (const char of normalized) {
+      if (/\s|[,、.。/／|｜_-]/.test(char)) continue;
+      if (/[0-9]/.test(char)) {
+        digits.push(Number(char));
+        continue;
+      }
+      const suit = suitFromChar(char);
+      if (suit) flushDigits(suit);
+      else if (honorIndexFromChar(char) >= 0) digits.length = 0;
+    }
+
+    return redCounts;
+  }
+
+  function toNotation(counts, redCounts = []) {
     const parts = [];
 
     for (const [offset, suit] of [[0, "m"], [9, "p"], [18, "s"]]) {
       let digits = "";
       for (let i = 0; i < 9; i += 1) {
-        digits += String(i + 1).repeat(counts[offset + i]);
+        const index = offset + i;
+        const red = Math.min(counts[index], redCounts[index] || 0);
+        digits += "0".repeat(red);
+        digits += String(i + 1).repeat(counts[index] - red);
       }
       if (digits) parts.push(`${digits}${suit}`);
     }
@@ -295,6 +401,10 @@
     return HAND_SIZE - fixedMeldCount() * 3;
   }
 
+  function maximumHandSize() {
+    return DRAW_HAND_SIZE - fixedMeldCount() * 3;
+  }
+
   function tileCountsFromTiles(tiles) {
     const counts = Array(34).fill(0);
     for (const tile of tiles) counts[tile] += 1;
@@ -309,11 +419,41 @@
     return [...state.openMelds, ...state.closedKans];
   }
 
+  function redCountsFromMelds(melds) {
+    const counts = Array(34).fill(0);
+    for (const meld of melds) {
+      for (let i = 0; i < meld.tiles.length; i += 1) {
+        if (meld.redTiles?.[i]) counts[meld.tiles[i]] += 1;
+      }
+    }
+    return counts;
+  }
+
+  function redCountsFromTiles(tiles, redTiles = []) {
+    const counts = Array(34).fill(0);
+    for (let i = 0; i < tiles.length; i += 1) {
+      if (redTiles[i]) counts[tiles[i]] += 1;
+    }
+    return counts;
+  }
+
+  function allUsedRedCounts({ extraClosedRedCounts = state.redCounts, includeDrafts = true } = {}) {
+    const counts = cloneCounts(extraClosedRedCounts);
+    const fixedRedCounts = redCountsFromMelds(fixedMelds());
+    for (let tile = 0; tile < 34; tile += 1) counts[tile] += fixedRedCounts[tile];
+    if (includeDrafts) {
+      const draftRedCounts = redCountsFromTiles(state.openDraft, state.openDraftRed);
+      for (let tile = 0; tile < 34; tile += 1) counts[tile] += draftRedCounts[tile];
+    }
+    return counts;
+  }
+
   function allUsedCounts({ includeDrafts = true, extraClosedCounts = state.counts } = {}) {
     const counts = cloneCounts(extraClosedCounts);
 
     for (const meld of state.openMelds) addTilesToCounts(counts, meld.tiles);
     for (const meld of state.closedKans) addTilesToCounts(counts, meld.tiles);
+    addTilesToCounts(counts, state.doraIndicators);
     if (includeDrafts) {
       addTilesToCounts(counts, state.openDraft);
       addTilesToCounts(counts, state.closedKanDraft);
@@ -326,6 +466,14 @@
     for (let i = 0; i < 34; i += 1) {
       if (counts[i] > 4) {
         throw new Error(`${TILE_DEFS[i].name} が5枚以上あります。`);
+      }
+    }
+  }
+
+  function validateRedUsage(counts, extraCounts = []) {
+    for (const index of RED_TILE_INDICES) {
+      if ((counts[index] || 0) + (extraCounts[index] || 0) > 1) {
+        throw new Error(`${TILE_DEFS[index].name}の赤牌は1枚までです。`);
       }
     }
   }
@@ -345,14 +493,18 @@
     return "メンツ";
   }
 
-  function openMeldFromThree(tiles) {
-    const sorted = tiles.slice().sort((a, b) => a - b);
+  function openMeldFromThree(tiles, redTiles = []) {
+    const entries = tiles.map((tile, index) => ({ tile, red: Boolean(redTiles[index]) }));
+    entries.sort((a, b) => a.tile - b.tile);
+    const sorted = entries.map((entry) => entry.tile);
+    const sortedRed = entries.map((entry) => entry.red);
 
     if (sorted[0] === sorted[1] && sorted[1] === sorted[2]) {
       return {
         type: "triplet",
         tile: sorted[0],
         tiles: sorted,
+        redTiles: sortedRed,
         open: true,
         concealed: false,
         fixed: true,
@@ -370,6 +522,7 @@
         type: "sequence",
         base: sorted[0],
         tiles: sorted,
+        redTiles: sortedRed,
         open: true,
         concealed: false,
         fixed: true,
@@ -379,23 +532,27 @@
     return null;
   }
 
-  function closedKanFromTile(tile) {
+  function closedKanFromTile(tile, red = false) {
     return {
       type: "kan",
       tile,
       tiles: [tile, tile, tile, tile],
+      redTiles: [Boolean(red), false, false, false],
       open: false,
       concealed: true,
       fixed: true,
     };
   }
 
-  function upgradeLastPonToKan(tile) {
+  function upgradeLastPonToKan(tile, red = false) {
     const last = state.openMelds[state.openMelds.length - 1];
     if (!last || last.type !== "triplet" || last.tile !== tile || !last.open) return false;
 
     last.type = "kan";
     last.tiles = [tile, tile, tile, tile];
+    last.redTiles = last.redTiles || [false, false, false];
+    if (red) last.redTiles.push(true);
+    else last.redTiles.push(false);
     return true;
   }
 
@@ -459,6 +616,10 @@
     if (state.inputMode === "hand") return new Set(Array.from({ length: 34 }, (_, i) => i));
 
     if (state.inputMode === "closedKan") {
+      return new Set(Array.from({ length: 34 }, (_, i) => i));
+    }
+
+    if (state.inputMode === "dora") {
       return new Set(Array.from({ length: 34 }, (_, i) => i));
     }
 
@@ -880,14 +1041,19 @@
     return { base: rawBase, limitName: "" };
   }
 
-  function buildScore({ context, isTsumo, fu, yaku, yakuman, shapeName, waitLabel = "" }) {
+  function buildScore({ counts, context, isTsumo, fu, yaku, yakuman, shapeName, waitLabel = "" }) {
     const isDealer = context.seatWind === 27;
     const yakumanCount = yakuman.reduce((sum, item) => sum + item.count, 0);
-    const dora = Math.max(0, Math.min(12, Math.trunc(Number(context.dora) || 0)));
+    const doraBreakdown = doraBreakdownForCounts(counts || [], context);
+    const dora = doraBreakdown.total;
     const baseHan = yaku.reduce((sum, item) => sum + item.han, 0);
     const scoredYaku = yakumanCount > 0 || dora === 0
       ? yaku
-      : [...yaku, { name: "ドラ", han: dora }];
+      : [
+        ...yaku,
+        ...(doraBreakdown.indicatorDora ? [{ name: "ドラ", han: doraBreakdown.indicatorDora }] : []),
+        ...(doraBreakdown.redDora ? [{ name: "赤ドラ", han: doraBreakdown.redDora }] : []),
+      ];
     let han = scoredYaku.reduce((sum, item) => sum + item.han, 0);
     let base;
     let limitName = "";
@@ -953,6 +1119,9 @@
 
   function scoreWinningTile(originalCounts, winningTile, context) {
     const fixed = context.fixedMelds || [];
+    const redCounts = cloneCounts(context.redCounts || Array(34).fill(0));
+    if (context.winningRed) redCounts[winningTile] += 1;
+    const scoreContext = { ...context, redCounts };
     const closedCounts = addTile(originalCounts, winningTile);
     const counts = cloneCounts(closedCounts);
     for (const meld of fixed) addTilesToCounts(counts, meld.tiles);
@@ -964,15 +1133,19 @@
     const tsumoScores = [];
 
     for (const pattern of patterns) {
-      const ron = scorePattern(counts, pattern, context, winningTile, false);
-      const tsumo = scorePattern(counts, pattern, context, winningTile, true);
+      const ron = scorePattern(counts, pattern, scoreContext, winningTile, false);
+      const tsumo = scorePattern(counts, pattern, scoreContext, winningTile, true);
       if (ron) ronScores.push(ron);
       if (tsumo) tsumoScores.push(tsumo);
     }
 
     return {
       tile: winningTile,
-      remaining: Math.max(0, 4 - (context.usedCounts?.[winningTile] ?? originalCounts[winningTile])),
+      winningRed: Boolean(context.winningRed),
+      remaining: context.winningRemaining ?? Math.max(
+        0,
+        4 - (context.usedCounts?.[winningTile] ?? originalCounts[winningTile]),
+      ),
       ron: bestScore(ronScores),
       tsumo: bestScore(tsumoScores),
       patternCount: patterns.length,
@@ -993,11 +1166,49 @@
   function analyzeTenpai(counts, context = state.settings) {
     const waits = [];
     const usedCounts = context.usedCounts || counts;
+    const redCounts = context.redCounts || Array(34).fill(0);
 
     for (let tile = 0; tile < 34; tile += 1) {
-      if (usedCounts[tile] >= 4) continue;
-      const result = scoreWinningTile(counts, tile, { ...context, usedCounts });
-      if (result) waits.push(result);
+      const remaining = Math.max(0, 4 - usedCounts[tile]);
+      if (!remaining) continue;
+
+      const redRemaining = isRedTileIndex(tile)
+        ? Math.max(0, 1 - redCounts[tile])
+        : 0;
+      const normalRemaining = remaining - redRemaining;
+      const variants = [];
+
+      if (normalRemaining > 0) {
+        variants.push(scoreWinningTile(counts, tile, {
+          ...context,
+          usedCounts,
+          winningRed: false,
+          winningRemaining: normalRemaining,
+        }));
+      }
+      if (redRemaining > 0) {
+        variants.push(scoreWinningTile(counts, tile, {
+          ...context,
+          usedCounts,
+          winningRed: true,
+          winningRemaining: redRemaining,
+        }));
+      }
+
+      const validVariants = variants.filter(Boolean);
+      if (!validVariants.length) continue;
+
+      const normal = validVariants.find((variant) => !variant.winningRed) || null;
+      const red = validVariants.find((variant) => variant.winningRed) || null;
+      waits.push({
+        tile,
+        remaining,
+        normal,
+        red,
+        ron: bestScore(validVariants.map((variant) => variant.ron).filter(Boolean)),
+        tsumo: bestScore(validVariants.map((variant) => variant.tsumo).filter(Boolean)),
+        patternCount: Math.max(...validVariants.map((variant) => variant.patternCount)),
+      });
     }
 
     waits.sort((a, b) => {
@@ -1011,11 +1222,550 @@
     return waits;
   }
 
-  function createTileButton(index, { onClick, disabled = false, badge = "", titleSuffix = "" } = {}) {
-    const tile = TILE_DEFS[index];
+  const shantenMemo = new Map();
+
+  function countsKey(counts) {
+    return counts.join("");
+  }
+
+  function normalShantenForFixed(inputCounts, fixedCount = 0) {
+    const key = `${fixedCount}:${countsKey(inputCounts)}`;
+    if (shantenMemo.has(`normal:${key}`)) return shantenMemo.get(`normal:${key}`);
+
+    const counts = cloneCounts(inputCounts);
+    let best = 8;
+
+    const updateBest = (melds, taatsu, hasPair) => {
+      const usableTaatsu = Math.min(taatsu, Math.max(0, 4 - fixedCount - melds));
+      const value = 8 - (fixedCount + melds) * 2 - usableTaatsu - (hasPair ? 1 : 0);
+      if (value < best) best = value;
+    };
+
+    const dfs = (startIndex, melds, taatsu, hasPair) => {
+      if (best === -1 || melds > 4 - fixedCount || taatsu > 4) return;
+
+      let index = startIndex;
+      while (index < 34 && counts[index] === 0) index += 1;
+
+      if (index >= 34) {
+        updateBest(melds, taatsu, hasPair);
+        return;
+      }
+
+      if (counts[index] >= 3) {
+        counts[index] -= 3;
+        dfs(index, melds + 1, taatsu, hasPair);
+        counts[index] += 3;
+      }
+
+      if (canStartSequence(index) && counts[index + 1] > 0 && counts[index + 2] > 0) {
+        counts[index] -= 1;
+        counts[index + 1] -= 1;
+        counts[index + 2] -= 1;
+        dfs(index, melds + 1, taatsu, hasPair);
+        counts[index] += 1;
+        counts[index + 1] += 1;
+        counts[index + 2] += 1;
+      }
+
+      if (!hasPair && counts[index] >= 2) {
+        counts[index] -= 2;
+        dfs(index, melds, taatsu, true);
+        counts[index] += 2;
+      }
+
+      if (counts[index] >= 2) {
+        counts[index] -= 2;
+        dfs(index, melds, taatsu + 1, hasPair);
+        counts[index] += 2;
+      }
+
+      if (canStartTwoSidedTaatsu(index) && counts[index + 1] > 0) {
+        counts[index] -= 1;
+        counts[index + 1] -= 1;
+        dfs(index, melds, taatsu + 1, hasPair);
+        counts[index] += 1;
+        counts[index + 1] += 1;
+      }
+
+      if (canStartSequence(index) && counts[index + 2] > 0) {
+        counts[index] -= 1;
+        counts[index + 2] -= 1;
+        dfs(index, melds, taatsu + 1, hasPair);
+        counts[index] += 1;
+        counts[index + 2] += 1;
+      }
+
+      counts[index] -= 1;
+      dfs(index, melds, taatsu, hasPair);
+      counts[index] += 1;
+    };
+
+    dfs(0, 0, 0, false);
+    shantenMemo.set(`normal:${key}`, best);
+    return best;
+  }
+
+  function chiitoitsuShanten(counts) {
+    let pairs = 0;
+    let uniqueTiles = 0;
+
+    for (const count of counts) {
+      if (count > 0) uniqueTiles += 1;
+      if (count >= 2) pairs += 1;
+    }
+
+    return 6 - pairs + Math.max(0, 7 - uniqueTiles);
+  }
+
+  function kokushiShanten(counts) {
+    let uniqueTerminals = 0;
+    let hasPair = false;
+
+    for (const index of TERMINALS_AND_HONORS) {
+      if (counts[index] > 0) uniqueTerminals += 1;
+      if (counts[index] >= 2) hasPair = true;
+    }
+
+    return 13 - uniqueTerminals - (hasPair ? 1 : 0);
+  }
+
+  function minShanten(counts, fixedCount = 0) {
+    const key = `${fixedCount}:${countsKey(counts)}`;
+    const memoKey = `min:${key}`;
+    if (shantenMemo.has(memoKey)) return shantenMemo.get(memoKey);
+
+    const values = {
+      normal: normalShantenForFixed(counts, fixedCount),
+      chiitoitsu: fixedCount === 0 ? chiitoitsuShanten(counts) : 99,
+      kokushi: fixedCount === 0 ? kokushiShanten(counts) : 99,
+    };
+    const shanten = Math.min(values.normal, values.chiitoitsu, values.kokushi);
+    const typeNames = [];
+
+    if (values.normal === shanten) typeNames.push("通常手");
+    if (values.chiitoitsu === shanten) typeNames.push("七対子");
+    if (values.kokushi === shanten) typeNames.push("国士無双");
+
+    const result = { shanten, values, typeNames };
+    shantenMemo.set(memoKey, result);
+    return result;
+  }
+
+  function formatShantenText(value) {
+    if (value < 0) return "和了";
+    if (value === 0) return "テンパイ";
+    return `${value}シャンテン`;
+  }
+
+  function usedCountsForEv(counts, context) {
+    const usedCounts = cloneCounts(counts);
+    for (const meld of context.fixedMelds || []) addTilesToCounts(usedCounts, meld.tiles);
+    addTilesToCounts(usedCounts, context.doraIndicators || []);
+    return usedCounts;
+  }
+
+  function usedRedCountsForEv(redCounts, context) {
+    const usedRedCounts = cloneCounts(redCounts || Array(34).fill(0));
+    const fixedRedCounts = context.fixedRedCounts || redCountsFromMelds(context.fixedMelds || []);
+    for (let tile = 0; tile < 34; tile += 1) {
+      usedRedCounts[tile] += fixedRedCounts[tile] || 0;
+    }
+    return usedRedCounts;
+  }
+
+  function redCountsForScoring(redCounts, context, winningTile = -1) {
+    const totalRedCounts = usedRedCountsForEv(redCounts, context);
+    if (winningTile >= 0) totalRedCounts[winningTile] += 1;
+    return totalRedCounts;
+  }
+
+  function emptyExpectedValue() {
+    return { points: 0, wins: 0, peakScore: 0, peakRoute: null };
+  }
+
+  function valuePotential(counts, context, redCounts = []) {
+    const allCounts = usedCountsForEv(counts, context);
+    const suitCounts = [0, 0, 0];
+    let honorCount = 0;
+    let pairCount = 0;
+    let completedSequenceCount = 0;
+    let duplicateSequenceCount = 0;
+    const sequencePresence = Array.from({ length: 3 }, () => Array(7).fill(false));
+
+    for (let tile = 0; tile < 34; tile += 1) {
+      if (allCounts[tile] >= 2) pairCount += 1;
+      if (tile >= 27) honorCount += allCounts[tile];
+      else suitCounts[Math.floor(tile / 9)] += allCounts[tile];
+    }
+
+    for (let suit = 0; suit < 3; suit += 1) {
+      const offset = suit * 9;
+      for (let base = 0; base <= 6; base += 1) {
+        const sequenceCount = Math.min(
+          allCounts[offset + base],
+          allCounts[offset + base + 1],
+          allCounts[offset + base + 2],
+        );
+        if (sequenceCount > 0) {
+          completedSequenceCount += sequenceCount;
+          if (sequenceCount >= 2) duplicateSequenceCount += 1;
+          sequencePresence[suit][base] = true;
+        }
+      }
+    }
+
+    const ittsuPotential = sequencePresence
+      .filter((presence) => presence[0] && presence[3] && presence[6]).length;
+    let sanshokuPotential = 0;
+    for (let base = 0; base <= 6; base += 1) {
+      const suitCount = sequencePresence.filter((presence) => presence[base]).length;
+      if (suitCount >= 2) sanshokuPotential += suitCount - 1;
+    }
+
+    const bestSuitCount = Math.max(...suitCounts);
+    const total = totalTiles(allCounts);
+    const offSuitCount = total - bestSuitCount - honorCount;
+    const redCount = RED_TILE_INDICES.size > 0
+      ? [...RED_TILE_INDICES].reduce((sum, tile) => sum + (redCounts[tile] || 0), 0)
+      : 0;
+
+    // This is only a branch-pruning signal. Actual points come from a
+    // completed hand scored by scoreWinningTile.
+    return bestSuitCount * 3
+      + honorCount * 2
+      - offSuitCount * 4
+      + pairCount
+      + completedSequenceCount
+      + duplicateSequenceCount * 4
+      + ittsuPotential * 5
+      + sanshokuPotential * 3
+      + redCount * 3;
+  }
+
+  function candidateDiscardsAfterDraw(afterDraw, afterRedCounts, drawsLeft, fixedCount, context) {
+    const candidates = [];
+
+    for (let discard = 0; discard < 34; discard += 1) {
+      if (!afterDraw[discard]) continue;
+
+      const redCopies = Math.min(afterDraw[discard], afterRedCounts[discard] || 0);
+      const normalCopies = afterDraw[discard] - redCopies;
+      const variants = [
+        { discardRed: false, copies: normalCopies },
+        { discardRed: true, copies: redCopies },
+      ];
+
+      for (const variant of variants) {
+        if (!variant.copies) continue;
+
+        const afterDiscard = cloneCounts(afterDraw);
+        afterDiscard[discard] -= 1;
+        const nextRedCounts = cloneCounts(afterRedCounts);
+        if (variant.discardRed) nextRedCounts[discard] -= 1;
+        const info = minShanten(afterDiscard, fixedCount);
+        if (info.shanten >= drawsLeft - 1) continue;
+        candidates.push({
+          discard,
+          discardRed: variant.discardRed,
+          counts: afterDiscard,
+          redCounts: nextRedCounts,
+          shanten: info.shanten,
+          potential: valuePotential(afterDiscard, context, nextRedCounts),
+        });
+      }
+    }
+
+    if (!candidates.length) return [];
+
+    candidates.sort((a, b) => {
+      if (a.shanten !== b.shanten) return a.shanten - b.shanten;
+      if (a.potential !== b.potential) return b.potential - a.potential;
+      return a.discard - b.discard;
+    });
+
+    const bestShanten = candidates[0].shanten;
+    const selected = candidates
+      .filter((candidate) => candidate.shanten === bestShanten)
+      .slice(0, EV_BRANCH_LIMIT);
+    const detours = candidates
+      .filter((candidate) => candidate.shanten > bestShanten && candidate.shanten <= bestShanten + 1)
+      .slice(0, EV_VALUE_DETOUR_LIMIT);
+
+    return [...selected, ...detours];
+  }
+
+  function candidateDrawsForState(counts, redCounts, fixedCount, context, currentInfo) {
+    const usedCounts = usedCountsForEv(counts, context);
+    const usedRedCounts = usedRedCountsForEv(redCounts, context);
+    const candidates = [];
+
+    for (let tile = 0; tile < 34; tile += 1) {
+      const remaining = Math.max(0, 4 - usedCounts[tile]);
+      if (!remaining) continue;
+
+      const redRemaining = isRedTileIndex(tile)
+        ? Math.max(0, 1 - usedRedCounts[tile])
+        : 0;
+      const normalRemaining = remaining - redRemaining;
+      const variants = [
+        { drawRed: false, copies: normalRemaining },
+        { drawRed: true, copies: redRemaining },
+      ];
+
+      for (const variant of variants) {
+        if (!variant.copies) continue;
+
+        const afterDraw = addTile(counts, tile);
+        const nextRedCounts = cloneCounts(redCounts);
+        if (variant.drawRed) nextRedCounts[tile] += 1;
+        const info = minShanten(afterDraw, fixedCount);
+        let winning = null;
+        if (info.shanten < 0) {
+          winning = scoreWinningTile(counts, tile, {
+            ...context,
+            usedCounts,
+            redCounts: redCountsForScoring(redCounts, context),
+            winningRed: variant.drawRed,
+          });
+        }
+
+        if (winning?.tsumo) {
+          candidates.push({
+            tile,
+            drawRed: variant.drawRed,
+            remaining: variant.copies,
+            winning,
+            priority: 4,
+            potential: Number.POSITIVE_INFINITY,
+          });
+          continue;
+        }
+
+        const shantenDelta = info.shanten - currentInfo.shanten;
+        if (shantenDelta > 1) continue;
+
+        candidates.push({
+          tile,
+          drawRed: variant.drawRed,
+          remaining: variant.copies,
+          winning: null,
+          afterDraw,
+          redCounts: nextRedCounts,
+          info,
+          priority: shantenDelta < 0 ? 3 : shantenDelta === 0 ? 2 : 1,
+          potential: valuePotential(afterDraw, context, nextRedCounts),
+        });
+      }
+    }
+
+    const winning = candidates.filter((candidate) => candidate.winning);
+    const improving = candidates
+      .filter((candidate) => candidate.priority === 3)
+      .sort((a, b) => b.potential - a.potential)
+      .slice(0, EV_DRAW_IMPROVING_LIMIT);
+    const maintaining = candidates
+      .filter((candidate) => candidate.priority === 2)
+      .sort((a, b) => b.potential - a.potential)
+      .slice(0, EV_DRAW_SAME_LIMIT);
+    const detours = candidates
+      .filter((candidate) => candidate.priority === 1)
+      .sort((a, b) => b.potential - a.potential)
+      .slice(0, EV_DRAW_DETOUR_LIMIT);
+
+    return [...winning, ...improving, ...maintaining, ...detours];
+  }
+
+  function createExpectedValueEvaluator(context, fixedCount) {
+    const memo = new Map();
+
+    const evaluateState = (counts, redCounts, drawsLeft) => {
+      if (drawsLeft <= 0) return emptyExpectedValue();
+
+      const key = `${drawsLeft}:${countsKey(counts)}:${countsKey(redCounts)}`;
+      if (memo.has(key)) return memo.get(key);
+
+      const info = minShanten(counts, fixedCount);
+      if (info.shanten >= drawsLeft) {
+        const result = emptyExpectedValue();
+        memo.set(key, result);
+        return result;
+      }
+
+      const usedCounts = usedCountsForEv(counts, context);
+      let totalRemaining = 0;
+      for (let tile = 0; tile < 34; tile += 1) {
+        totalRemaining += Math.max(0, 4 - usedCounts[tile]);
+      }
+
+      if (totalRemaining <= 0) {
+        const result = emptyExpectedValue();
+        memo.set(key, result);
+        return result;
+      }
+
+      const result = emptyExpectedValue();
+      const drawCandidates = candidateDrawsForState(
+        counts,
+        redCounts,
+        fixedCount,
+        context,
+        info,
+      );
+
+      for (const candidate of drawCandidates) {
+        const { tile, remaining, winning } = candidate;
+        const probability = remaining / totalRemaining;
+
+        let child;
+        if (winning?.tsumo) {
+          child = {
+            points: winning.tsumo.total,
+            wins: 1,
+            peakScore: winning.tsumo.total,
+            peakRoute: winning.tsumo,
+          };
+        } else {
+          const afterDraw = candidate.afterDraw;
+          const discardCandidates = candidateDiscardsAfterDraw(
+            afterDraw,
+            candidate.redCounts,
+            drawsLeft,
+            fixedCount,
+            context,
+          );
+          const bestCandidate = discardCandidates[0];
+          child = bestCandidate
+            ? evaluateState(bestCandidate.counts, bestCandidate.redCounts, drawsLeft - 1)
+            : emptyExpectedValue();
+        }
+
+        result.points += probability * child.points;
+        result.wins += probability * child.wins;
+        if (child.peakScore > result.peakScore) {
+          result.peakScore = child.peakScore;
+          result.peakRoute = child.peakRoute;
+        }
+      }
+
+      memo.set(key, result);
+      return result;
+    };
+
+    return evaluateState;
+  }
+
+  function analyzeExpectedValue(counts, context = state.settings, {
+    maxShanten = EV_MAX_SHANTEN,
+    maxDraws = EV_MAX_DRAWS,
+  } = {}) {
+    const fixedCount = (context.fixedMelds || []).length;
+    const currentShanten = minShanten(counts, fixedCount);
+    if (currentShanten.shanten > maxShanten) {
+      return { currentShanten, options: [], skipped: true, maxDraws };
+    }
+
+    const evaluateState = createExpectedValueEvaluator(context, fixedCount);
+    const options = [];
+    const redCounts = cloneCounts(
+      context.concealedRedCounts || context.redCounts || Array(34).fill(0),
+    );
+
+    for (let discard = 0; discard < 34; discard += 1) {
+      if (!counts[discard]) continue;
+
+      const redCopies = Math.min(counts[discard], redCounts[discard] || 0);
+      const normalCopies = counts[discard] - redCopies;
+      const variants = [
+        { discardRed: false, copies: normalCopies },
+        { discardRed: true, copies: redCopies },
+      ];
+
+      for (const variant of variants) {
+        if (!variant.copies) continue;
+
+        const afterDiscard = cloneCounts(counts);
+        afterDiscard[discard] -= 1;
+        const afterRedCounts = cloneCounts(redCounts);
+        if (variant.discardRed) afterRedCounts[discard] -= 1;
+        const afterInfo = minShanten(afterDiscard, fixedCount);
+        const accepts = [];
+        let totalAcceptance = 0;
+        const usedCounts = usedCountsForEv(afterDiscard, context);
+        const usedRedCounts = usedRedCountsForEv(afterRedCounts, context);
+
+        for (let draw = 0; draw < 34; draw += 1) {
+          const remaining = Math.max(0, 4 - usedCounts[draw]);
+          if (!remaining) continue;
+
+          const redRemaining = isRedTileIndex(draw)
+            ? Math.max(0, 1 - usedRedCounts[draw])
+            : 0;
+          const normalRemaining = remaining - redRemaining;
+          const drawVariants = [
+            { drawRed: false, copies: normalRemaining },
+            { drawRed: true, copies: redRemaining },
+          ];
+
+          for (const drawVariant of drawVariants) {
+            if (!drawVariant.copies) continue;
+            const afterDraw = addTile(afterDiscard, draw);
+            const drawInfo = minShanten(afterDraw, fixedCount);
+            if (drawInfo.shanten < afterInfo.shanten) {
+              accepts.push({
+                tile: draw,
+                drawRed: drawVariant.drawRed,
+                remaining: drawVariant.copies,
+                shanten: drawInfo.shanten,
+              });
+              totalAcceptance += drawVariant.copies;
+            }
+          }
+        }
+
+        const expected = afterInfo.shanten <= maxShanten + 1
+          ? evaluateState(afterDiscard, afterRedCounts, maxDraws)
+          : emptyExpectedValue();
+
+        options.push({
+          discard,
+          discardRed: variant.discardRed,
+          afterShanten: afterInfo.shanten,
+          afterTypes: afterInfo.typeNames,
+          accepts,
+          totalAcceptance,
+          expectedPoints: expected.points,
+          winProbability: expected.wins,
+          averagePoints: expected.wins > 0 ? expected.points / expected.wins : 0,
+          peakScore: expected.peakScore,
+          peakRoute: expected.peakRoute,
+        });
+      }
+    }
+
+    options.sort((a, b) => {
+      if (a.expectedPoints !== b.expectedPoints) return b.expectedPoints - a.expectedPoints;
+      if (a.winProbability !== b.winProbability) return b.winProbability - a.winProbability;
+      if (a.averagePoints !== b.averagePoints) return b.averagePoints - a.averagePoints;
+      if (a.afterShanten !== b.afterShanten) return a.afterShanten - b.afterShanten;
+      return a.discard - b.discard;
+    });
+
+    return { currentShanten, options, skipped: false, maxDraws };
+  }
+
+  function createTileButton(index, {
+    onClick,
+    disabled = false,
+    badge = "",
+    titleSuffix = "",
+    red = false,
+  } = {}) {
+    const tile = tileDefinition(index, red);
     const button = document.createElement("button");
     button.type = "button";
     button.className = "tile";
+    if (red) button.classList.add("red-tile");
     button.disabled = disabled;
     button.title = `${tile.name}${titleSuffix}`;
     button.setAttribute("aria-label", `${tile.name}${titleSuffix}`);
@@ -1043,8 +1793,8 @@
     return button;
   }
 
-  function createMiniTile(index, countText = "") {
-    const tile = TILE_DEFS[index];
+  function createMiniTile(index, countText = "", red = false) {
+    const tile = tileDefinition(index, red);
     const chip = document.createElement("span");
     chip.className = "mini-tile";
     chip.title = tile.name;
@@ -1077,27 +1827,37 @@
   }
 
   function calculationContext() {
+    const fixedRedCounts = redCountsFromMelds(fixedMelds());
+    const redCounts = state.redCounts.map((count, index) => count + fixedRedCounts[index]);
     return {
       ...state.settings,
+      doraIndicators: state.doraIndicators.slice(),
+      redCounts,
+      concealedRedCounts: state.redCounts.slice(),
+      fixedRedCounts,
       fixedMelds: fixedMelds(),
       usedCounts: allUsedCounts({ includeDrafts: false }),
     };
   }
 
-  function addHandTile(index) {
-    if (totalTiles(state.counts) >= requiredHandSize()) return;
+  function addHandTile(index, red = false) {
+    if (totalTiles(state.counts) >= maximumHandSize()) return;
     const used = allUsedCounts();
     if (used[index] >= 4) return;
+    const usedRed = allUsedRedCounts();
+    if (red && (!isRedTileIndex(index) || usedRed[index] >= 1)) return;
 
     state.counts[index] += 1;
+    if (red) state.redCounts[index] += 1;
   }
 
-  function addOpenTile(index) {
+  function addOpenTile(index, red = false) {
     const used = allUsedCounts();
     if (used[index] >= 4) return;
+    if (red && (!isRedTileIndex(index) || allUsedRedCounts()[index] >= 1)) return;
 
     if (state.openDraft.length === 0 && canUpgradeLastPon(index)) {
-      upgradeLastPonToKan(index);
+      upgradeLastPonToKan(index, red);
       return;
     }
 
@@ -1105,39 +1865,58 @@
     if (!openDraftCandidateTiles().has(index)) return;
 
     state.openDraft.push(index);
+    state.openDraftRed.push(Boolean(red));
     if (state.openDraft.length < 3) return;
 
-    const meld = openMeldFromThree(state.openDraft);
+    const meld = openMeldFromThree(state.openDraft, state.openDraftRed);
     if (meld) {
       state.openMelds.push(meld);
       state.openDraft = [];
+      state.openDraftRed = [];
     }
   }
 
-  function addClosedKanTile(index) {
+  function addClosedKanTile(index, red = false) {
     const used = allUsedCounts();
     if (used[index] !== 0) return;
     if (fixedMeldCount() >= 4) return;
 
     state.closedKanDraft = [];
-    state.closedKans.push(closedKanFromTile(index));
+    state.closedKans.push(closedKanFromTile(index, red));
   }
 
-  function addTileByMode(index) {
-    if (state.inputMode === "hand") addHandTile(index);
-    else if (state.inputMode === "open") addOpenTile(index);
-    else if (state.inputMode === "closedKan") addClosedKanTile(index);
+  function addDoraTile(index) {
+    if (state.doraIndicators.length >= 4) return;
+    const used = allUsedCounts();
+    if (used[index] >= 4) return;
+
+    state.doraIndicators.push(index);
   }
 
-  function canClickPaletteTile(index) {
+  function addTileByMode(index, red = false) {
+    if (state.inputMode === "hand") addHandTile(index, red);
+    else if (state.inputMode === "open") addOpenTile(index, red);
+    else if (state.inputMode === "closedKan") addClosedKanTile(index, red);
+    else if (state.inputMode === "dora") addDoraTile(index);
+  }
+
+  function canClickPaletteTile(index, red = false) {
     const used = allUsedCounts();
     if (used[index] >= 4) return false;
+    if (red) {
+      if (!isRedTileIndex(index)) return false;
+      if (allUsedRedCounts()[index] >= 1) return false;
+    }
 
-    if (state.inputMode === "hand") return totalTiles(state.counts) < requiredHandSize();
+    if (state.inputMode === "hand") return totalTiles(state.counts) < maximumHandSize();
     if (state.inputMode === "closedKan") {
       if (fixedMeldCount() >= 4) return false;
       if (used[index] !== 0) return false;
       return currentModeCandidateTiles().has(index);
+    }
+
+    if (state.inputMode === "dora") {
+      return !red && state.doraIndicators.length < 4;
     }
 
     if (state.inputMode === "open") {
@@ -1157,9 +1936,11 @@
     });
   }
 
-  function renderMiniTiles(tiles) {
+  function renderMiniTiles(tiles, redTiles = []) {
     const fragment = document.createDocumentFragment();
-    for (const tile of tiles) fragment.append(createMiniTile(tile));
+    tiles.forEach((tile, index) => {
+      fragment.append(createMiniTile(tile, "", Boolean(redTiles[index])));
+    });
     return fragment;
   }
 
@@ -1169,7 +1950,7 @@
     button.className = "meld-card";
     button.title = `${meldLabel(meld)}を削除`;
     button.setAttribute("aria-label", `${meldLabel(meld)}を削除`);
-    button.append(renderMiniTiles(meld.tiles));
+    button.append(renderMiniTiles(meld.tiles, meld.redTiles));
 
     const label = document.createElement("span");
     label.className = "meld-label";
@@ -1180,12 +1961,29 @@
     return button;
   }
 
-  function renderDraft(container, draft, label, onClear) {
+  function createDoraCard(indicator, onClick) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "meld-card";
+    button.title = "表ドラを削除";
+    button.setAttribute("aria-label", `${TILE_DEFS[indicator].name}の表ドラを削除`);
+    button.append(createMiniTile(indicator));
+
+    const label = document.createElement("span");
+    label.className = "meld-label";
+    label.textContent = `→ ${TILE_DEFS[doraTileFromIndicator(indicator)].short}`;
+    button.append(label);
+
+    button.addEventListener("click", onClick);
+    return button;
+  }
+
+  function renderDraft(container, draft, redDraft, label, onClear) {
     if (!draft.length) return;
 
     const draftCard = document.createElement("span");
     draftCard.className = "meld-card";
-    draftCard.append(renderMiniTiles(draft));
+    draftCard.append(renderMiniTiles(draft, redDraft));
     const labelNode = document.createElement("span");
     labelNode.className = "meld-label";
     labelNode.textContent = label;
@@ -1227,15 +2025,30 @@
       for (let index = group.start; index <= group.end; index += 1) {
         const count = used[index];
         row.append(createTileButton(index, {
-          disabled: !candidates.has(index) || !canClickPaletteTile(index),
+          disabled: !candidates.has(index) || !canClickPaletteTile(index, false),
           badge: count ? String(count) : "",
           titleSuffix: "を追加",
           onClick: () => {
-            if (!canClickPaletteTile(index)) return;
-            addTileByMode(index);
+            if (!canClickPaletteTile(index, false)) return;
+            addTileByMode(index, false);
             renderAll({ syncNotation: true });
           },
         }));
+
+        if (isRedTileIndex(index) && state.inputMode !== "dora") {
+          const redUsed = allUsedRedCounts({ includeDrafts: true })[index];
+          row.append(createTileButton(index, {
+            red: true,
+            disabled: !candidates.has(index) || !canClickPaletteTile(index, true),
+            badge: redUsed ? "赤" : "",
+            titleSuffix: "を追加",
+            onClick: () => {
+              if (!canClickPaletteTile(index, true)) return;
+              addTileByMode(index, true);
+              renderAll({ syncNotation: true });
+            },
+          }));
+        }
       }
 
       groupNode.append(row);
@@ -1249,7 +2062,7 @@
     if (!hand || !countNode) return;
 
     hand.replaceChildren();
-    countNode.textContent = `${totalTiles(state.counts)} / ${requiredHandSize()}`;
+    countNode.textContent = `${totalTiles(state.counts)} / ${requiredHandSize()}〜${maximumHandSize()}`;
 
     if (totalTiles(state.counts) === 0) {
       const empty = document.createElement("p");
@@ -1260,11 +2073,24 @@
     }
 
     for (let index = 0; index < 34; index += 1) {
-      for (let copy = 0; copy < state.counts[index]; copy += 1) {
+      const redCopies = Math.min(state.counts[index], state.redCounts[index] || 0);
+      const normalCopies = state.counts[index] - redCopies;
+      for (let copy = 0; copy < normalCopies; copy += 1) {
         hand.append(createTileButton(index, {
           titleSuffix: "を外す",
           onClick: () => {
             state.counts[index] -= 1;
+            renderAll({ syncNotation: true });
+          },
+        }));
+      }
+      for (let copy = 0; copy < redCopies; copy += 1) {
+        hand.append(createTileButton(index, {
+          red: true,
+          titleSuffix: "を外す",
+          onClick: () => {
+            state.counts[index] -= 1;
+            state.redCounts[index] -= 1;
             renderAll({ syncNotation: true });
           },
         }));
@@ -1291,8 +2117,9 @@
             renderAll({ syncNotation: true });
           }));
         });
-        renderDraft(openNode, state.openDraft, "入力途中", () => {
+        renderDraft(openNode, state.openDraft, state.openDraftRed, "入力途中", () => {
           state.openDraft = [];
+          state.openDraftRed = [];
           renderAll({ syncNotation: true });
         });
       }
@@ -1313,12 +2140,33 @@
             renderAll({ syncNotation: true });
           }));
         });
-        renderDraft(closedNode, state.closedKanDraft, "入力途中", () => {
+        renderDraft(closedNode, state.closedKanDraft, [], "入力途中", () => {
           state.closedKanDraft = [];
           renderAll({ syncNotation: true });
         });
       }
     }
+  }
+
+  function renderDoraIndicators() {
+    const doraNode = document.getElementById("dora-indicators");
+    if (!doraNode) return;
+
+    doraNode.replaceChildren();
+    if (!state.doraIndicators.length) {
+      const empty = document.createElement("p");
+      empty.className = "empty";
+      empty.textContent = "ドラ表示牌モードで表ドラ表示牌を最大4枚タップできます。";
+      doraNode.append(empty);
+      return;
+    }
+
+    state.doraIndicators.forEach((indicator, index) => {
+      doraNode.append(createDoraCard(indicator, () => {
+        state.doraIndicators.splice(index, 1);
+        renderAll();
+      }));
+    });
   }
 
   function renderScoreCell(score, missingText) {
@@ -1389,6 +2237,132 @@
     return list;
   }
 
+  function formatExpectedPoints(value) {
+    return `${Math.round(value).toLocaleString("ja-JP")}点`;
+  }
+
+  function formatProbability(value) {
+    return `${(value * 100).toFixed(1)}%`;
+  }
+
+  function renderExpectedValueResult(result, context) {
+    const section = document.createDocumentFragment();
+    const current = result.currentShanten;
+
+    if (result.skipped) {
+      const summary = document.createElement("div");
+      summary.className = "summary";
+
+      const score = document.createElement("div");
+      score.className = "score-card";
+      score.innerHTML = `
+        <div class="score-label">現在の牌姿</div>
+        <div class="score-value">${formatShantenText(current.shanten)}</div>
+        <div class="score-sub">期待値比較は ${EV_MAX_SHANTEN}シャンテン以内が対象です</div>
+      `;
+      summary.append(score);
+
+      const note = document.createElement("div");
+      note.className = "note-card";
+      note.innerHTML = `
+        <strong>今回は探索対象外です。</strong><br>
+        遠い牌姿は分岐が大きくなるため、${EV_MAX_SHANTEN}シャンテン以内で計算します。
+      `;
+      summary.append(note);
+      section.append(summary);
+      return section;
+    }
+
+    const best = result.options[0];
+    const summary = document.createElement("div");
+    summary.className = "summary";
+
+    const score = document.createElement("div");
+    score.className = "score-card";
+    const bestDiscardLabel = tileDefinition(best.discard, best.discardRed).short;
+    score.innerHTML = `
+      <div class="score-label">期待得点が最大の打牌</div>
+      <div class="score-value">${bestDiscardLabel}</div>
+      <div class="score-sub">${formatExpectedPoints(best.expectedPoints)} / 和了確率 ${formatProbability(best.winProbability)}</div>
+    `;
+    summary.append(score);
+
+    const note = document.createElement("div");
+    note.className = "note-card";
+    note.innerHTML = `
+      <strong>${formatShantenText(current.shanten)}の14枚を比較しています。</strong><br>
+      ツモ限定・最大${result.maxDraws}回の簡易探索です。手牌にある牌だけを減らし、他家の捨て牌や場況は考慮しません。<br>
+      期待得点は、各ルートの <strong>和了確率 × ツモ時の受取点</strong> を比較した値です。シャンテン数を維持する手役上昇ルートも候補に残しますが、分岐を抑えるため有力な受け入れに絞っています。
+    `;
+    summary.append(note);
+    section.append(summary);
+
+    const tableWrap = document.createElement("div");
+    tableWrap.className = "result-table-wrap";
+    const table = document.createElement("table");
+    table.innerHTML = `
+      <thead>
+        <tr>
+          <th>打牌</th>
+          <th>打牌後</th>
+          <th>受け入れ</th>
+          <th>期待得点</th>
+          <th>和了確率</th>
+          <th>平均打点</th>
+          <th>最高打点ルート</th>
+        </tr>
+      </thead>
+    `;
+    const tbody = document.createElement("tbody");
+
+    for (const [index, option] of result.options.entries()) {
+      const row = document.createElement("tr");
+      if (index === 0) row.className = "best";
+
+      const discardCell = document.createElement("td");
+      discardCell.className = "discard-cell";
+      discardCell.append(createMiniTile(option.discard, "", option.discardRed));
+      row.append(discardCell);
+
+      const shantenCell = document.createElement("td");
+      shantenCell.textContent = formatShantenText(option.afterShanten);
+      row.append(shantenCell);
+
+      const acceptanceCell = document.createElement("td");
+      acceptanceCell.className = "ukeire-count";
+      acceptanceCell.textContent = `${option.totalAcceptance}枚`;
+      row.append(acceptanceCell);
+
+      const expectedCell = document.createElement("td");
+      const expectedPoints = document.createElement("span");
+      expectedPoints.className = "points";
+      expectedPoints.textContent = formatExpectedPoints(option.expectedPoints);
+      expectedCell.append(expectedPoints);
+      row.append(expectedCell);
+
+      const probabilityCell = document.createElement("td");
+      probabilityCell.textContent = formatProbability(option.winProbability);
+      row.append(probabilityCell);
+
+      const averageCell = document.createElement("td");
+      averageCell.textContent = option.winProbability > 0
+        ? formatExpectedPoints(option.averagePoints)
+        : "—";
+      row.append(averageCell);
+
+      const routeCell = document.createElement("td");
+      routeCell.append(renderYakuList(option.peakRoute));
+      row.append(routeCell);
+
+      tbody.append(row);
+    }
+
+    table.append(tbody);
+    tableWrap.append(table);
+    section.append(tableWrap);
+    return section;
+  }
+
   function renderResult() {
     const result = document.getElementById("result");
     if (!result) return;
@@ -1396,6 +2370,7 @@
     result.replaceChildren();
     const total = totalTiles(state.counts);
     const required = requiredHandSize();
+    const maximum = maximumHandSize();
 
     const title = document.createElement("h2");
     title.textContent = "計算結果";
@@ -1409,15 +2384,22 @@
       return;
     }
 
+    const context = calculationContext();
+
+    if (total === maximum && maximum !== required) {
+      const expected = analyzeExpectedValue(state.counts, context);
+      result.append(renderExpectedValueResult(expected, context));
+      return;
+    }
+
     if (total !== required) {
       const empty = document.createElement("p");
       empty.className = "empty";
-      empty.textContent = `${required}枚ちょうど選ぶと計算します。現在は ${total} 枚です。`;
+      empty.textContent = `${required}枚で点数計算、${maximum}枚で打牌の期待値を計算します。現在は ${total} 枚です。`;
       result.append(empty);
       return;
     }
 
-    const context = calculationContext();
     const waits = analyzeTenpai(state.counts, context);
 
     if (!waits.length) {
@@ -1464,8 +2446,8 @@
     note.className = "note-card";
     const menzen = isMenzen(context);
     note.innerHTML = `
-      <strong>計算範囲:</strong> ${menzen ? "門前扱い" : "副露あり"}。ドラは入力枚数を飜数に加算します。親/子は自風で判定します。<br>
-      最高点になる和了形を自動で選び、ロンとツモを別々に表示します。
+      <strong>計算範囲:</strong> ${menzen ? "門前扱い" : "副露あり"}。表ドラ表示牌からドラ枚数を自動計算します。親/子は自風で判定します。<br>
+      最高点になる和了形を自動で選び、ロンとツモを別々に表示します。赤5は赤ドラ1枚として計算します。
       ${bestRon ? `<br>最高ロン: <strong>${bestRon.display}</strong>` : ""}
       ${bestTsumo ? `<br>最高ツモ: <strong>${bestTsumo.display}</strong>` : ""}
     `;
@@ -1494,6 +2476,12 @@
       const waitCell = document.createElement("td");
       waitCell.className = "wait-cell";
       waitCell.append(createMiniTile(wait.tile));
+      if (wait.red) {
+        const redNote = document.createElement("span");
+        redNote.className = "pill";
+        redNote.textContent = `赤${wait.red.remaining}枚`;
+        waitCell.append(redNote);
+      }
       row.append(waitCell);
 
       const remainingCell = document.createElement("td");
@@ -1525,16 +2513,10 @@
     const roundWind = document.getElementById("round-wind");
     const seatWind = document.getElementById("seat-wind");
     const riichi = document.getElementById("riichi");
-    const doraCount = document.getElementById("dora-count");
 
     if (roundWind) state.settings.roundWind = Number(roundWind.value);
     if (seatWind) state.settings.seatWind = Number(seatWind.value);
     if (riichi) state.settings.riichi = riichi.checked;
-    if (doraCount) {
-      const value = Math.max(0, Math.min(12, Math.trunc(Number(doraCount.value) || 0)));
-      state.settings.dora = value;
-      if (String(value) !== doraCount.value) doraCount.value = String(value);
-    }
   }
 
   function renderAll({ syncNotation = false } = {}) {
@@ -1542,13 +2524,14 @@
 
     if (syncNotation) {
       const notation = document.getElementById("notation");
-      if (notation) notation.value = toNotation(state.counts);
+      if (notation) notation.value = toNotation(state.counts, state.redCounts);
     }
 
     setError("");
     renderPalette();
     renderHand();
     renderMeldZones();
+    renderDoraIndicators();
     renderResult();
   }
 
@@ -1560,14 +2543,19 @@
     const roundWind = document.getElementById("round-wind");
     const seatWind = document.getElementById("seat-wind");
     const riichi = document.getElementById("riichi");
-    const doraCount = document.getElementById("dora-count");
     const modeButtons = document.querySelectorAll(".mode-button");
 
     const applyNotation = () => {
       try {
-        const nextCounts = parseNotation(notation.value, { maxTiles: requiredHandSize() });
+        const nextCounts = parseNotation(notation.value, { maxTiles: maximumHandSize() });
+        const nextRedCounts = redCountsFromNotation(notation.value);
         validateTileUsage(allUsedCounts({ extraClosedCounts: nextCounts }));
+        validateRedUsage(
+          nextRedCounts,
+          allUsedRedCounts({ extraClosedRedCounts: Array(34).fill(0) }),
+        );
         state.counts = nextCounts;
+        state.redCounts = nextRedCounts;
         renderAll({ syncNotation: true });
       } catch (error) {
         setError(error.message);
@@ -1581,9 +2569,12 @@
 
     clearButton.addEventListener("click", () => {
       state.counts = Array(34).fill(0);
+      state.redCounts = Array(34).fill(0);
       state.openMelds = [];
       state.closedKans = [];
+      state.doraIndicators = [];
       state.openDraft = [];
+      state.openDraftRed = [];
       state.closedKanDraft = [];
       renderAll({ syncNotation: true });
     });
@@ -1593,9 +2584,12 @@
       state.sampleIndex += 1;
       state.openMelds = [];
       state.closedKans = [];
+      state.doraIndicators = [];
       state.openDraft = [];
+      state.openDraftRed = [];
       state.closedKanDraft = [];
-      state.counts = parseNotation(sample, { maxTiles: HAND_SIZE });
+      state.redCounts = Array(34).fill(0);
+      state.counts = parseNotation(sample, { maxTiles: maximumHandSize() });
       renderAll({ syncNotation: true });
     });
 
@@ -1608,26 +2602,54 @@
       });
     });
 
-    for (const control of [roundWind, seatWind, riichi, doraCount]) {
+    for (const control of [roundWind, seatWind, riichi]) {
       if (control) control.addEventListener("change", () => renderAll());
     }
-    if (doraCount) doraCount.addEventListener("input", () => renderAll());
+  }
+
+  function loadNotationFromQuery() {
+    if (typeof window === "undefined" || !window.location) return "";
+
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has("p")) return "";
+
+    const notation = params.get("p") || "";
+    try {
+      const nextCounts = parseNotation(notation, { maxTiles: maximumHandSize() });
+      const nextRedCounts = redCountsFromNotation(notation);
+      validateTileUsage(allUsedCounts({ extraClosedCounts: nextCounts }));
+      validateRedUsage(nextRedCounts);
+      state.counts = nextCounts;
+      state.redCounts = nextRedCounts;
+      return "";
+    } catch (error) {
+      return `URLのpパラメータを読み込めませんでした: ${error.message}`;
+    }
   }
 
   function init() {
     bindControls();
+    const queryError = loadNotationFromQuery();
     renderAll({ syncNotation: true });
+    if (queryError) setError(queryError);
   }
 
   const publicApi = {
     TILE_DEFS,
     HAND_SIZE,
+    RED_TILE_IMAGES,
+    isRedTileIndex,
+    doraTileFromIndicator,
+    doraCountForCounts,
     parseNotation,
+    redCountsFromNotation,
     toNotation,
     getWinningPatterns,
     analyzeTenpai,
     scoreWinningTile,
     scorePattern,
+    minShanten,
+    analyzeExpectedValue,
     isKokushi,
     isChiitoitsu,
     decomposeStandard,

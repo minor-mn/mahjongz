@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>麻雀テンパイ点数計算</title>
+  <title>麻雀点数・期待値計算</title>
   <style>
     :root {
       color-scheme: light;
@@ -433,6 +433,10 @@
       padding: 14px;
     }
 
+    .dora-zone {
+      margin-top: 14px;
+    }
+
     .meld-zone h3 {
       margin: 0 0 10px;
       font-size: 0.98rem;
@@ -670,8 +674,8 @@
   <main class="app">
     <header class="hero">
       <p class="eyebrow">Riichi Mahjong Helper</p>
-      <h1>テンパイなら、何点？</h1>
-      <p class="lead">手牌と副露・暗槓を選ぶと、テンパイしているかを判定し、和了牌ごとのロン点・ツモ点を表示します。副露時は必要な手牌枚数が自動で減り、役・符・ドラ枚数を計算に反映します。</p>
+      <h1>どの打牌が、いちばん得？</h1>
+      <p class="lead">13枚ならテンパイ時の点数を、14枚なら打牌ごとの受け入れ・和了確率・平均打点・期待得点を表示します。副露・暗槓、風、表ドラも計算に反映します。</p>
     </header>
 
     <div class="grid">
@@ -686,7 +690,7 @@
           <button class="button secondary" id="sample-hand" type="button">例題</button>
           <button class="button secondary" id="clear-hand" type="button">クリア</button>
         </div>
-        <p class="hint">表記: m=萬子、p=筒子、s=索子、z=字牌。字牌は 1z=東 2z=南 3z=西 4z=北 5z=白 6z=發 7z=中。赤5は通常の5として扱います。ドラ枚数は計算条件で入力してください。</p>
+        <p class="hint">表記: m=萬子、p=筒子、s=索子、z=字牌。字牌は 1z=東 2z=南 3z=西 4z=北 5z=白 6z=發 7z=中。赤5は 0m / 0p / 0s で入力できます。URLの <code>?p=2340667m13566p99s</code> でも読み込めます。13枚で点数計算、14枚で打牌の期待値比較を行います。</p>
         <p class="error" id="input-error" role="alert" hidden></p>
       </section>
 
@@ -715,12 +719,8 @@
             <input id="riichi" type="checkbox">
             リーチ済み
           </label>
-          <div class="input-wrap dora-field">
-            <label for="dora-count">ドラの枚数</label>
-            <input id="dora-count" type="number" min="0" max="12" step="1" value="0" inputmode="numeric">
-          </div>
         </div>
-        <p class="hint">ロンは役がある場合だけ点数を出します。ツモは門前清自摸和を自動で加算します。ドラは0〜12枚まで入力できます。</p>
+        <p class="hint">ロンは役がある場合だけ点数を出します。ツモは門前清自摸和を自動で加算します。表ドラ表示牌は、牌をクリックして最大4枚入力できます。</p>
       </section>
 
       <section class="panel" aria-labelledby="palette-title">
@@ -730,6 +730,7 @@
             <button class="mode-button active" type="button" data-mode="hand">手牌</button>
             <button class="mode-button" type="button" data-mode="open">副露</button>
             <button class="mode-button" type="button" data-mode="closedKan">暗槓</button>
+            <button class="mode-button" type="button" data-mode="dora">ドラ表示牌</button>
           </div>
         </div>
         <div id="tile-palette" class="palette"></div>
@@ -750,6 +751,10 @@
             <h3>現在の暗槓</h3>
             <div id="closed-kans" class="meld-list" aria-live="polite"></div>
           </div>
+        </div>
+        <div class="meld-zone dora-zone">
+          <h3>現在のドラ表示牌</h3>
+          <div id="dora-indicators" class="meld-list" aria-live="polite"></div>
         </div>
       </section>
 
