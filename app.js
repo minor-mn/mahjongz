@@ -1302,7 +1302,6 @@
     }
     if (a.han !== b.han) return a.han - b.han;
     if (a.total !== b.total) return a.total - b.total;
-    if (a.fu !== b.fu) return a.fu - b.fu;
     return 0;
   }
 
@@ -1529,13 +1528,39 @@
   }
 
   function emptyExpectedValue() {
-    return { points: 0, wins: 0, peakScore: 0, peakHan: -1, peakRoute: null };
+    return {
+      points: 0,
+      wins: 0,
+      peakScore: 0,
+      peakHan: -1,
+      peakProbability: 0,
+      peakRoute: null,
+    };
+  }
+
+  function considerPeakRoute(result, candidate, probability) {
+    if (!candidate.peakRoute) return;
+
+    const comparison = result.peakRoute
+      ? compareScorePriority(candidate.peakRoute, result.peakRoute)
+      : 1;
+    if (comparison > 0 || (comparison === 0 && probability > result.peakProbability)) {
+      result.peakScore = candidate.peakScore;
+      result.peakHan = candidate.peakHan;
+      result.peakProbability = probability;
+      result.peakRoute = candidate.peakRoute;
+    }
   }
 
   function valuePotential(counts, context, redCounts = []) {
-    const allCounts = usedCountsForEv(counts, context);
+    // Dora indicators are unavailable tiles, not tiles in the hand.  They
+    // must not create a fake pair or make an isolated honor look useful.
+    const allCounts = cloneCounts(counts);
+    for (const meld of context.fixedMelds || []) addTilesToCounts(allCounts, meld.tiles);
     const suitCounts = [0, 0, 0];
     let honorCount = 0;
+    let isolatedHonorCount = 0;
+    let honorTripletCount = 0;
     let pairCount = 0;
     let completedSequenceCount = 0;
     let duplicateSequenceCount = 0;
@@ -1543,7 +1568,11 @@
 
     for (let tile = 0; tile < 34; tile += 1) {
       if (allCounts[tile] >= 2) pairCount += 1;
-      if (tile >= 27) honorCount += allCounts[tile];
+      if (tile >= 27) {
+        honorCount += allCounts[tile];
+        if (allCounts[tile] === 1) isolatedHonorCount += 1;
+        if (allCounts[tile] >= 3) honorTripletCount += Math.floor(allCounts[tile] / 3);
+      }
       else suitCounts[Math.floor(tile / 9)] += allCounts[tile];
     }
 
@@ -1566,9 +1595,21 @@
     const ittsuPotential = sequencePresence
       .filter((presence) => presence[0] && presence[3] && presence[6]).length;
     let sanshokuPotential = 0;
+    let supportedSanshokuPotential = 0;
     for (let base = 0; base <= 6; base += 1) {
       const suitCount = sequencePresence.filter((presence) => presence[base]).length;
       if (suitCount >= 2) sanshokuPotential += suitCount - 1;
+
+      const supports = [0, 1, 2].map((suit) => sequenceSupport(allCounts, suit, base));
+      const supportedSuitCount = supports.filter((support) => support.partial).length;
+      const completeSuitCount = supports.filter((support) => support.complete).length;
+      if (supportedSuitCount === 3 && completeSuitCount >= 2 && completeSuitCount < 3) {
+        // Keep a developing sanshoku route when one suit still needs a tile.
+        // This is deliberately stronger than the completed-sequence signal so
+        // that a structurally supported hand is not pruned in favor of a
+        // route that needs to draw an honor triplet from scratch.
+        supportedSanshokuPotential += 8 + completeSuitCount * 4;
+      }
     }
 
     const bestSuitCount = Math.max(...suitCounts);
@@ -1581,13 +1622,15 @@
     // This is only a branch-pruning signal. Actual points come from a
     // completed hand scored by scoreWinningTile.
     return bestSuitCount * 3
-      + honorCount * 2
       - offSuitCount * 4
       + pairCount
       + completedSequenceCount
       + duplicateSequenceCount * 4
       + ittsuPotential * 5
       + sanshokuPotential * 3
+      + supportedSanshokuPotential
+      + honorTripletCount * 6
+      - isolatedHonorCount * 2
       + redCount * 3;
   }
 
@@ -1792,6 +1835,7 @@
             wins: 1,
             peakScore: winning.tsumo.total,
             peakHan: winning.tsumo.han,
+            peakProbability: 1,
             peakRoute: winning.tsumo,
           };
         } else {
@@ -1823,14 +1867,7 @@
 
         result.points += probability * child.points;
         result.wins += probability * child.wins;
-        if (
-          child.peakRoute
-          && (!result.peakRoute || compareScorePriority(child.peakRoute, result.peakRoute) > 0)
-        ) {
-          result.peakScore = child.peakScore;
-          result.peakHan = child.peakHan;
-          result.peakRoute = child.peakRoute;
-        }
+        considerPeakRoute(result, child, probability * child.peakProbability);
       }
 
       const omittedProbability = Math.max(0, 1 - coveredProbability);
@@ -1838,14 +1875,7 @@
         const noChange = evaluateState(counts, redCounts, drawsLeft - 1, valueOpen);
         result.points += omittedProbability * noChange.points;
         result.wins += omittedProbability * noChange.wins;
-        if (
-          noChange.peakRoute
-          && (!result.peakRoute || compareScorePriority(noChange.peakRoute, result.peakRoute) > 0)
-        ) {
-          result.peakScore = noChange.peakScore;
-          result.peakHan = noChange.peakHan;
-          result.peakRoute = noChange.peakRoute;
-        }
+        considerPeakRoute(result, noChange, omittedProbability * noChange.peakProbability);
       }
 
       memo.set(key, result);
@@ -1943,6 +1973,7 @@
           winProbability: expected.wins,
           averagePoints: expected.wins > 0 ? expected.points / expected.wins : 0,
           peakScore: expected.peakScore,
+          peakProbability: expected.peakProbability,
           peakRoute: expected.peakRoute,
         });
       }
