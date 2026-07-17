@@ -173,7 +173,7 @@
   }
 
   function generateSanshokuExample() {
-    const fallback = parseNotation("123m12p12s11z69m78p9s");
+    const fallback = parseNotation("123m12p12s99m45m7m5p8s");
 
     for (let attempt = 0; attempt < SAMPLE_GENERATION_ATTEMPTS; attempt += 1) {
       const counts = Array(34).fill(0);
@@ -196,15 +196,14 @@
       }
 
       const pairCandidates = shuffled(
-        Array.from({ length: 7 }, (_, index) => 27 + index)
-          .concat(Array.from({ length: 27 }, (_, index) => index))
+        Array.from({ length: 27 }, (_, index) => index)
           .filter((tile) => !supportTiles.has(tile) && counts[tile] <= 2),
       );
       const pair = pairCandidates.find((tile) => counts[tile] <= 2);
       if (pair === undefined || !addTilesToCountsSafely(counts, [pair, pair])) continue;
 
       const fillerCandidates = shuffled(
-        Array.from({ length: 34 }, (_, tile) => tile)
+        Array.from({ length: 27 }, (_, tile) => tile)
           .filter((tile) => counts[tile] === 0 && !supportTiles.has(tile) && tile !== pair),
       );
       for (const tile of fillerCandidates) {
