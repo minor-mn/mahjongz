@@ -1885,6 +1885,104 @@
     return evaluateState;
   }
 
+  function strictAcceptanceForState(counts, redCounts, fixedCount, context) {
+    const shanten = minShanten(counts, fixedCount);
+    const usedCounts = usedCountsForEv(counts, context);
+    const usedRedCounts = usedRedCountsForEv(redCounts, context);
+    const accepts = [];
+    let total = 0;
+
+    for (let draw = 0; draw < 34; draw += 1) {
+      const remaining = Math.max(0, 4 - usedCounts[draw]);
+      if (!remaining) continue;
+
+      const redRemaining = isRedTileIndex(draw)
+        ? Math.max(0, 1 - usedRedCounts[draw])
+        : 0;
+      const normalRemaining = remaining - redRemaining;
+      const drawVariants = [
+        { drawRed: false, copies: normalRemaining },
+        { drawRed: true, copies: redRemaining },
+      ];
+
+      for (const drawVariant of drawVariants) {
+        if (!drawVariant.copies) continue;
+        const afterDraw = addTile(counts, draw);
+        const drawInfo = minShanten(afterDraw, fixedCount);
+        if (drawInfo.shanten >= shanten.shanten) continue;
+
+        accepts.push({
+          tile: draw,
+          drawRed: drawVariant.drawRed,
+          remaining: drawVariant.copies,
+          shanten: drawInfo.shanten,
+        });
+        total += drawVariant.copies;
+      }
+    }
+
+    return { shanten, accepts, total };
+  }
+
+  function bestAcceptanceAfterDraw(afterDraw, afterRedCounts, baseShanten, fixedCount, context) {
+    let best = null;
+
+    for (let discard = 0; discard < 34; discard += 1) {
+      if (!afterDraw[discard]) continue;
+
+      const redCopies = Math.min(afterDraw[discard], afterRedCounts[discard] || 0);
+      const normalCopies = afterDraw[discard] - redCopies;
+      const variants = [
+        { discardRed: false, copies: normalCopies },
+        { discardRed: true, copies: redCopies },
+      ];
+
+      for (const variant of variants) {
+        if (!variant.copies) continue;
+
+        const afterDiscard = cloneCounts(afterDraw);
+        afterDiscard[discard] -= 1;
+        const nextRedCounts = cloneCounts(afterRedCounts);
+        if (variant.discardRed) nextRedCounts[discard] -= 1;
+        const info = minShanten(afterDiscard, fixedCount);
+        if (info.shanten > baseShanten) continue;
+
+        const acceptance = strictAcceptanceForState(
+          afterDiscard,
+          nextRedCounts,
+          fixedCount,
+          context,
+        );
+        const candidate = {
+          discard,
+          discardRed: variant.discardRed,
+          shanten: info.shanten,
+          total: acceptance.total,
+          potential: valuePotential(afterDiscard, context, nextRedCounts),
+        };
+
+        if (
+          !best
+          || candidate.shanten < best.shanten
+          || (
+            candidate.shanten === best.shanten
+            && (
+              candidate.total > best.total
+              || (
+                candidate.total === best.total
+                && candidate.potential > best.potential
+              )
+            )
+          )
+        ) {
+          best = candidate;
+        }
+      }
+    }
+
+    return best;
+  }
+
   function analyzeExpectedValue(counts, context = state.settings, {
     maxShanten = EV_MAX_SHANTEN,
     maxDraws = EV_MAX_DRAWS,
@@ -1919,8 +2017,14 @@
         const afterRedCounts = cloneCounts(redCounts);
         if (variant.discardRed) afterRedCounts[discard] -= 1;
         const afterInfo = minShanten(afterDiscard, fixedCount);
-        const accepts = [];
-        let totalAcceptance = 0;
+        const strictAcceptance = strictAcceptanceForState(
+          afterDiscard,
+          afterRedCounts,
+          fixedCount,
+          context,
+        );
+        const accepts = strictAcceptance.accepts.slice();
+        let totalAcceptance = strictAcceptance.total;
         const usedCounts = usedCountsForEv(afterDiscard, context);
         const usedRedCounts = usedRedCountsForEv(afterRedCounts, context);
 
@@ -1941,15 +2045,28 @@
             if (!drawVariant.copies) continue;
             const afterDraw = addTile(afterDiscard, draw);
             const drawInfo = minShanten(afterDraw, fixedCount);
-            if (drawInfo.shanten < afterInfo.shanten) {
-              accepts.push({
-                tile: draw,
-                drawRed: drawVariant.drawRed,
-                remaining: drawVariant.copies,
-                shanten: drawInfo.shanten,
-              });
-              totalAcceptance += drawVariant.copies;
-            }
+            if (drawInfo.shanten !== afterInfo.shanten) continue;
+
+            const nextAcceptance = bestAcceptanceAfterDraw(
+              afterDraw,
+              drawVariant.drawRed
+                ? addTile(afterRedCounts, draw)
+                : afterRedCounts,
+              afterInfo.shanten,
+              fixedCount,
+              context,
+            );
+            if (!nextAcceptance || nextAcceptance.total <= strictAcceptance.total) continue;
+
+            accepts.push({
+              tile: draw,
+              drawRed: drawVariant.drawRed,
+              remaining: drawVariant.copies,
+              shanten: drawInfo.shanten,
+              shapeImprovement: true,
+              nextAcceptance: nextAcceptance.total,
+            });
+            totalAcceptance += drawVariant.copies;
           }
         }
 
@@ -2528,7 +2645,7 @@
     note.innerHTML = `
       <strong>${formatShantenText(current.shanten)}の14枚を比較しています。</strong><br>
       残り12巡、副露なしで確率を計算しています。シャンテン数を下げない打点上昇牌も採用します。<br>
-      期待得点は各ルートの <strong>和了確率 × ツモ時の受取点</strong> を比較した値です。受け入れ枚数はシャンテン数を1つ下げる牌だけを数えています。
+      期待得点は各ルートの <strong>和了確率 × ツモ時の受取点</strong> を比較した値です。受け入れ枚数はシャンテン数を下げる牌と、同じシャンテン数でも次の受け入れ枚数を増やす牌を数えています。
     `;
     summary.append(note);
     section.append(summary);
