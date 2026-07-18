@@ -1924,7 +1924,32 @@
     return { shanten, accepts, total };
   }
 
-  function bestAcceptanceAfterDraw(afterDraw, afterRedCounts, baseShanten, fixedCount, context) {
+  function tileHasShapeSupport(counts, tile) {
+    if (counts[tile] >= 2) return true;
+    if (!isSuitTile(tile)) return false;
+
+    const position = tile % 9;
+    const offset = Math.floor(tile / 9) * 9;
+    for (let base = 0; base <= 6; base += 1) {
+      if (position < base || position > base + 2) continue;
+      const sequence = [offset + base, offset + base + 1, offset + base + 2];
+      if (sequence.some((candidate) => candidate !== tile && counts[candidate] > 0)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  function bestAcceptanceAfterDraw(
+    afterDraw,
+    afterRedCounts,
+    baseShanten,
+    fixedCount,
+    context,
+    requiredTile = -1,
+    requiredMinimumCount = -1,
+  ) {
     let best = null;
 
     for (let discard = 0; discard < 34; discard += 1) {
@@ -1942,6 +1967,10 @@
 
         const afterDiscard = cloneCounts(afterDraw);
         afterDiscard[discard] -= 1;
+        if (
+          requiredTile >= 0
+          && afterDiscard[requiredTile] <= requiredMinimumCount
+        ) continue;
         const nextRedCounts = cloneCounts(afterRedCounts);
         if (variant.discardRed) nextRedCounts[discard] -= 1;
         const info = minShanten(afterDiscard, fixedCount);
@@ -1959,6 +1988,7 @@
           shanten: info.shanten,
           total: acceptance.total,
           potential: valuePotential(afterDiscard, context, nextRedCounts),
+          counts: afterDiscard,
         };
 
         if (
@@ -2055,8 +2085,14 @@
               afterInfo.shanten,
               fixedCount,
               context,
+              draw,
+              afterDiscard[draw],
             );
-            if (!nextAcceptance || nextAcceptance.total <= strictAcceptance.total) continue;
+            if (
+              !nextAcceptance
+              || nextAcceptance.total <= strictAcceptance.total
+              || !tileHasShapeSupport(nextAcceptance.counts, draw)
+            ) continue;
 
             accepts.push({
               tile: draw,
