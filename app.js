@@ -2712,10 +2712,8 @@
 
     const note = document.createElement("div");
     note.className = "note-card";
-    const menzen = isMenzen(context);
     note.innerHTML = `
-      <strong>計算範囲:</strong> ${menzen ? "門前扱い" : "副露あり"}。表ドラ表示牌からドラ枚数を自動計算します。親/子は自風で判定します。<br>
-      最高点になる和了形を自動で選び、ロンとツモを別々に表示します。赤5は赤ドラ1枚として計算します。
+      <strong>計算範囲:</strong> 親/子は自風で判定します。裏ドラと一発はサポート外です。ロンとツモを個別に表示します。
       ${bestRon ? `<br>最高ロン: <strong>${bestRon.display}</strong>` : ""}
       ${bestTsumo ? `<br>最高ツモ: <strong>${bestTsumo.display}</strong>` : ""}
     `;
