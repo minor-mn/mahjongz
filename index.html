@@ -722,9 +722,9 @@
 <body>
   <main class="app">
     <header class="hero">
-      <p class="eyebrow">Riichi Mahjong Helper</p>
-      <h1>どの打牌が、いちばん得？</h1>
-      <p class="lead">13枚ならテンパイ時の点数を、14枚なら打牌ごとの受け入れ・和了確率・平均打点・期待得点を表示します。副露・暗槓、風、表ドラも計算に反映します。</p>
+      <p class="eyebrow">Mahjong EV</p>
+      <h1>最適打牌</h1>
+      <p class="lead">テンパイ形13枚を作ると各和了時の点数を、シャンテン形14枚を作ると打牌ごとの受け入れ枚数と期待得点を表示します。</p>
     </header>
 
     <div class="grid">
@@ -739,7 +739,7 @@
           <button class="button secondary" id="sample-hand" type="button">例題</button>
           <button class="button secondary" id="clear-hand" type="button">クリア</button>
         </div>
-        <p class="hint">表記: m=萬子、p=筒子、s=索子、z=字牌。字牌は 1z=東 2z=南 3z=西 4z=北 5z=白 6z=發 7z=中。赤5は 0m / 0p / 0s で入力できます。URLの <code>?p=2340667m13566p99s</code> でも読み込めます。13枚で点数計算、14枚で打牌の期待値比較を行います。例題は三色に発展できる2シャンテンの通常手をランダム生成します。</p>
+        <p class="hint">表記: m=萬子、p=筒子、s=索子、z=字牌。字牌は 1z=東 2z=南 3z=西 4z=北 5z=白 6z=發 7z=中。赤5は 0m / 0p / 0s です。例題は任意の2シャンテンを生成します。</p>
         <p class="error" id="input-error" role="alert" hidden></p>
       </section>
 
@@ -772,7 +772,6 @@
             リーチ済み
           </label>
         </div>
-        <p class="hint">ロンは役がある場合だけ点数を出します。ツモは門前清自摸和を自動で加算します。表ドラ表示牌は、牌をクリックして最大4枚入力できます。URLでは <code>dora=4m9p</code>、<code>round=1z</code>、<code>seat=2z</code>、<code>riichi=1</code> を指定できます。省略時は東場・南家・リーチOFFです。</p>
       </section>
 
       <section class="panel" aria-labelledby="palette-title">

@@ -2303,7 +2303,7 @@
     if (totalTiles(state.counts) === 0) {
       const empty = document.createElement("p");
       empty.className = "empty";
-      empty.textContent = "まだ牌がありません。上の牌をクリックするか、文字入力で手牌を入れてください。";
+      empty.textContent = "手牌がありません。上の牌をクリックするか、手牌入力で手牌を作ってください。";
       hand.append(empty);
       return;
     }
@@ -2517,7 +2517,7 @@
     score.className = "score-card";
     const bestDiscardLabel = tileDefinition(best.discard, best.discardRed).short;
     score.innerHTML = `
-      <div class="score-label">期待得点が最大の打牌</div>
+      <div class="score-label">最良打牌</div>
       <div class="score-value">${bestDiscardLabel}</div>
       <div class="score-sub">${formatExpectedPoints(best.expectedPoints)} / 和了確率 ${formatProbability(best.winProbability)}</div>
     `;
@@ -2527,8 +2527,8 @@
     note.className = "note-card";
     note.innerHTML = `
       <strong>${formatShantenText(current.shanten)}の14枚を比較しています。</strong><br>
-      ツモ限定・最大${result.maxDraws}回、牌姿をまとめて再利用する確率DPで計算しています。非有効牌は空振りとしてまとめ、手牌・副露・ドラ表示牌以外の場況は考慮しません。シャンテン数を維持する打点上昇牌も、最初の有効ツモまで候補に残します。<br>
-      期待得点は、各ルートの <strong>和了確率 × ツモ時の受取点</strong> を比較した値です。最高打点ルートの表示は<strong>翻数を優先し、同じ翻数なら受取点</strong>で選びます。シャンテン数を維持する手役上昇ルートも候補に残しますが、分岐を抑えるため有力な受け入れに絞っています。
+      残り12巡、副露なしで確率を計算しています。シャンテン数を下げない打点上昇牌も採用します。<br>
+      期待得点は各ルートの <strong>和了確率 × ツモ時の受取点</strong> を比較した値です。受け入れ枚数はシャンテン数を1つ下げる牌だけを数えています。
     `;
     summary.append(note);
     section.append(summary);
@@ -2678,7 +2678,7 @@
       score.className = "score-card";
       score.innerHTML = `
         <div class="score-label">現在の手牌</div>
-        <div class="score-value">非テンパイ</div>
+        <div class="score-value">ノーテン</div>
         <div class="score-sub">完成する和了牌がありません</div>
       `;
       summary.append(score);
