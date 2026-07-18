@@ -2644,7 +2644,7 @@
     note.className = "note-card";
     note.innerHTML = `
       <strong>${formatShantenText(current.shanten)}の14枚を比較しています。</strong><br>
-      残り12巡、副露なしで確率を計算しています。シャンテン数を下げない打点上昇牌も採用します。<br>
+      残り12巡、副露なしで確率を計算しています。シャンテン数を下げない打点上昇牌も採用します。
       期待得点は各ルートの <strong>和了確率 × ツモ時の受取点</strong> を比較した値です。受け入れ枚数はシャンテン数を下げる牌と、同じシャンテン数でも次の受け入れ枚数を増やす牌を数えています。
     `;
     summary.append(note);
