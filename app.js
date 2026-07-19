@@ -1505,18 +1505,22 @@
     return `${value}シャンテン`;
   }
 
-  function usedCountsForEv(counts, context) {
+  function usedCountsForEv(counts, context, unavailableCounts = []) {
     const usedCounts = cloneCounts(counts);
     for (const meld of context.fixedMelds || []) addTilesToCounts(usedCounts, meld.tiles);
     addTilesToCounts(usedCounts, context.doraIndicators || []);
+    for (let tile = 0; tile < 34; tile += 1) {
+      usedCounts[tile] += unavailableCounts[tile] || 0;
+    }
     return usedCounts;
   }
 
-  function usedRedCountsForEv(redCounts, context) {
+  function usedRedCountsForEv(redCounts, context, unavailableRedCounts = []) {
     const usedRedCounts = cloneCounts(redCounts || Array(34).fill(0));
     const fixedRedCounts = context.fixedRedCounts || redCountsFromMelds(context.fixedMelds || []);
     for (let tile = 0; tile < 34; tile += 1) {
       usedRedCounts[tile] += fixedRedCounts[tile] || 0;
+      usedRedCounts[tile] += unavailableRedCounts[tile] || 0;
     }
     return usedRedCounts;
   }
@@ -1634,7 +1638,15 @@
       + redCount * 3;
   }
 
-  function candidateDiscardsAfterDraw(afterDraw, afterRedCounts, drawsLeft, fixedCount, context) {
+  function candidateDiscardsAfterDraw(
+    afterDraw,
+    afterRedCounts,
+    drawsLeft,
+    fixedCount,
+    context,
+    unavailableCounts = Array(34).fill(0),
+    unavailableRedCounts = Array(34).fill(0),
+  ) {
     const candidates = [];
 
     for (let discard = 0; discard < 34; discard += 1) {
@@ -1654,6 +1666,10 @@
         afterDiscard[discard] -= 1;
         const nextRedCounts = cloneCounts(afterRedCounts);
         if (variant.discardRed) nextRedCounts[discard] -= 1;
+        const nextUnavailableCounts = cloneCounts(unavailableCounts);
+        nextUnavailableCounts[discard] += 1;
+        const nextUnavailableRedCounts = cloneCounts(unavailableRedCounts);
+        if (variant.discardRed) nextUnavailableRedCounts[discard] += 1;
         const info = minShanten(afterDiscard, fixedCount);
         if (info.shanten >= drawsLeft - 1) continue;
         candidates.push({
@@ -1661,6 +1677,8 @@
           discardRed: variant.discardRed,
           counts: afterDiscard,
           redCounts: nextRedCounts,
+          unavailableCounts: nextUnavailableCounts,
+          unavailableRedCounts: nextUnavailableRedCounts,
           shanten: info.shanten,
           potential: valuePotential(afterDiscard, context, nextRedCounts),
         });
@@ -1693,10 +1711,21 @@
     context,
     currentShanten,
     allowValueDraws = true,
+    unavailableCounts = Array(34).fill(0),
+    unavailableRedCounts = Array(34).fill(0),
   ) {
-    const usedCounts = usedCountsForEv(counts, context);
-    const usedRedCounts = usedRedCountsForEv(redCounts, context);
-    const currentPotential = valuePotential(counts, context, redCounts);
+    const usedCounts = usedCountsForEv(counts, context, unavailableCounts);
+    const usedRedCounts = usedRedCountsForEv(redCounts, context, unavailableRedCounts);
+    const currentAcceptance = allowValueDraws
+      ? strictAcceptanceForState(
+        counts,
+        redCounts,
+        fixedCount,
+        context,
+        unavailableCounts,
+        unavailableRedCounts,
+      )
+      : null;
     const candidates = [];
 
     for (let tile = 0; tile < 34; tile += 1) {
@@ -1744,6 +1773,27 @@
         const shantenDelta = info.shanten - currentShanten;
         if (shantenDelta > 1) continue;
 
+        let nextAcceptance = null;
+        if (shantenDelta === 0) {
+          if (!allowValueDraws) continue;
+          nextAcceptance = bestAcceptanceAfterDraw(
+            afterDraw,
+            nextRedCounts,
+            currentShanten,
+            fixedCount,
+            context,
+            tile,
+            counts[tile],
+            unavailableCounts,
+            unavailableRedCounts,
+          );
+          if (
+            !nextAcceptance
+            || nextAcceptance.total <= currentAcceptance.total
+            || !tileHasShapeSupport(nextAcceptance.counts, tile)
+          ) continue;
+        }
+
         candidates.push({
           tile,
           drawRed: variant.drawRed,
@@ -1754,6 +1804,7 @@
           info,
           priority: shantenDelta < 0 ? 3 : shantenDelta === 0 ? 2 : 1,
           potential: valuePotential(afterDraw, context, nextRedCounts),
+          nextAcceptance: nextAcceptance?.total || 0,
         });
       }
     }
@@ -1771,9 +1822,14 @@
         allowValueDraws
         &&
         candidate.priority === 2
-        && candidate.potential > currentPotential + EV_VALUE_GAIN_THRESHOLD
+        && candidate.nextAcceptance > currentAcceptance.total + EV_VALUE_GAIN_THRESHOLD
       ))
-      .sort((a, b) => b.potential - a.potential)
+      .sort((a, b) => {
+        if (a.nextAcceptance !== b.nextAcceptance) {
+          return b.nextAcceptance - a.nextAcceptance;
+        }
+        return b.potential - a.potential;
+      })
       .slice(0, EV_DRAW_SAME_LIMIT);
     const detours = candidates
       .filter((candidate) => candidate.priority === 1)
@@ -1787,10 +1843,17 @@
     const memo = new Map();
     const discardMemo = new Map();
 
-    const evaluateState = (counts, redCounts, drawsLeft, valueOpen = true) => {
+    const evaluateState = (
+      counts,
+      redCounts,
+      drawsLeft,
+      valueOpen = true,
+      unavailableCounts = Array(34).fill(0),
+      unavailableRedCounts = Array(34).fill(0),
+    ) => {
       if (drawsLeft <= 0) return emptyExpectedValue();
 
-      const key = `${drawsLeft}:${valueOpen ? "1" : "0"}:${countsKey(counts)}:${countsKey(redCounts)}`;
+      const key = `${drawsLeft}:${valueOpen ? "1" : "0"}:${countsKey(counts)}:${countsKey(redCounts)}:${countsKey(unavailableCounts)}:${countsKey(unavailableRedCounts)}`;
       if (memo.has(key)) return memo.get(key);
 
       const info = minShanten(counts, fixedCount);
@@ -1800,7 +1863,7 @@
         return result;
       }
 
-      const usedCounts = usedCountsForEv(counts, context);
+      const usedCounts = usedCountsForEv(counts, context, unavailableCounts);
       let totalRemaining = 0;
       for (let tile = 0; tile < 34; tile += 1) {
         totalRemaining += Math.max(0, 4 - usedCounts[tile]);
@@ -1820,6 +1883,8 @@
         context,
         info.shanten,
         valueOpen,
+        unavailableCounts,
+        unavailableRedCounts,
       );
       let coveredProbability = 0;
 
@@ -1840,7 +1905,7 @@
           };
         } else {
           const afterDraw = candidate.afterDraw;
-          const discardKey = `${drawsLeft}:${countsKey(afterDraw)}:${countsKey(candidate.redCounts)}`;
+          const discardKey = `${drawsLeft}:${countsKey(afterDraw)}:${countsKey(candidate.redCounts)}:${countsKey(unavailableCounts)}:${countsKey(unavailableRedCounts)}`;
           let discardCandidates = discardMemo.get(discardKey);
           if (!discardCandidates) {
             discardCandidates = candidateDiscardsAfterDraw(
@@ -1849,17 +1914,34 @@
               drawsLeft,
               fixedCount,
               context,
+              unavailableCounts,
+              unavailableRedCounts,
             );
             discardMemo.set(discardKey, discardCandidates);
           }
-          const bestCandidate = discardCandidates[0];
-          if (bestCandidate) {
-            child = evaluateState(
-              bestCandidate.counts,
-              bestCandidate.redCounts,
+          let bestChild = null;
+          for (const discardCandidate of discardCandidates) {
+            const candidateChild = evaluateState(
+              discardCandidate.counts,
+              discardCandidate.redCounts,
               drawsLeft - 1,
               false,
+              discardCandidate.unavailableCounts,
+              discardCandidate.unavailableRedCounts,
             );
+            if (
+              !bestChild
+              || candidateChild.points > bestChild.points
+              || (
+                candidateChild.points === bestChild.points
+                && candidateChild.wins > bestChild.wins
+              )
+            ) {
+              bestChild = candidateChild;
+            }
+          }
+          if (bestChild) {
+            child = bestChild;
           } else {
             child = emptyExpectedValue();
           }
@@ -1872,7 +1954,14 @@
 
       const omittedProbability = Math.max(0, 1 - coveredProbability);
       if (omittedProbability > 0 && drawsLeft > 1) {
-        const noChange = evaluateState(counts, redCounts, drawsLeft - 1, valueOpen);
+        const noChange = evaluateState(
+          counts,
+          redCounts,
+          drawsLeft - 1,
+          valueOpen,
+          unavailableCounts,
+          unavailableRedCounts,
+        );
         result.points += omittedProbability * noChange.points;
         result.wins += omittedProbability * noChange.wins;
         considerPeakRoute(result, noChange, omittedProbability * noChange.peakProbability);
@@ -1885,10 +1974,17 @@
     return evaluateState;
   }
 
-  function strictAcceptanceForState(counts, redCounts, fixedCount, context) {
+  function strictAcceptanceForState(
+    counts,
+    redCounts,
+    fixedCount,
+    context,
+    unavailableCounts = Array(34).fill(0),
+    unavailableRedCounts = Array(34).fill(0),
+  ) {
     const shanten = minShanten(counts, fixedCount);
-    const usedCounts = usedCountsForEv(counts, context);
-    const usedRedCounts = usedRedCountsForEv(redCounts, context);
+    const usedCounts = usedCountsForEv(counts, context, unavailableCounts);
+    const usedRedCounts = usedRedCountsForEv(redCounts, context, unavailableRedCounts);
     const accepts = [];
     let total = 0;
 
@@ -1949,6 +2045,8 @@
     context,
     requiredTile = -1,
     requiredMinimumCount = -1,
+    unavailableCounts = Array(34).fill(0),
+    unavailableRedCounts = Array(34).fill(0),
   ) {
     let best = null;
 
@@ -1973,6 +2071,10 @@
         ) continue;
         const nextRedCounts = cloneCounts(afterRedCounts);
         if (variant.discardRed) nextRedCounts[discard] -= 1;
+        const nextUnavailableCounts = cloneCounts(unavailableCounts);
+        nextUnavailableCounts[discard] += 1;
+        const nextUnavailableRedCounts = cloneCounts(unavailableRedCounts);
+        if (variant.discardRed) nextUnavailableRedCounts[discard] += 1;
         const info = minShanten(afterDiscard, fixedCount);
         if (info.shanten > baseShanten) continue;
 
@@ -1981,6 +2083,8 @@
           nextRedCounts,
           fixedCount,
           context,
+          nextUnavailableCounts,
+          nextUnavailableRedCounts,
         );
         const candidate = {
           discard,
@@ -1989,6 +2093,8 @@
           total: acceptance.total,
           potential: valuePotential(afterDiscard, context, nextRedCounts),
           counts: afterDiscard,
+          unavailableCounts: nextUnavailableCounts,
+          unavailableRedCounts: nextUnavailableRedCounts,
         };
 
         if (
@@ -2046,17 +2152,31 @@
         afterDiscard[discard] -= 1;
         const afterRedCounts = cloneCounts(redCounts);
         if (variant.discardRed) afterRedCounts[discard] -= 1;
+        const unavailableCounts = Array(34).fill(0);
+        unavailableCounts[discard] = 1;
+        const unavailableRedCounts = Array(34).fill(0);
+        if (variant.discardRed) unavailableRedCounts[discard] = 1;
         const afterInfo = minShanten(afterDiscard, fixedCount);
+        // A discard must not make the hand farther from tenpai.  Value-oriented
+        // routes are allowed only when the current shanten is maintained or
+        // improved; an initial one-shanten detour is not a candidate.
+        if (afterInfo.shanten > currentShanten.shanten) continue;
         const strictAcceptance = strictAcceptanceForState(
           afterDiscard,
           afterRedCounts,
           fixedCount,
           context,
+          unavailableCounts,
+          unavailableRedCounts,
         );
         const accepts = strictAcceptance.accepts.slice();
         let totalAcceptance = strictAcceptance.total;
-        const usedCounts = usedCountsForEv(afterDiscard, context);
-        const usedRedCounts = usedRedCountsForEv(afterRedCounts, context);
+        const usedCounts = usedCountsForEv(afterDiscard, context, unavailableCounts);
+        const usedRedCounts = usedRedCountsForEv(
+          afterRedCounts,
+          context,
+          unavailableRedCounts,
+        );
 
         for (let draw = 0; draw < 34; draw += 1) {
           const remaining = Math.max(0, 4 - usedCounts[draw]);
@@ -2087,6 +2207,8 @@
               context,
               draw,
               afterDiscard[draw],
+              unavailableCounts,
+              unavailableRedCounts,
             );
             if (
               !nextAcceptance
@@ -2106,12 +2228,14 @@
           }
         }
 
-        const expected = afterInfo.shanten <= maxShanten + 1
+        const expected = afterInfo.shanten <= maxShanten
           ? evaluateState(
             afterDiscard,
             afterRedCounts,
             maxDraws,
             afterInfo.shanten <= currentShanten.shanten,
+            unavailableCounts,
+            unavailableRedCounts,
           )
           : emptyExpectedValue();
 
