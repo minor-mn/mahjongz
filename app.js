@@ -2769,7 +2769,17 @@
     window.setTimeout(() => layer.remove(), 260);
   }
 
-  function showAcceptanceDetail(option) {
+  function acceptanceDetailKind(accept, context) {
+    if (!accept.shapeImprovement) return "向聴減";
+
+    const doraTiles = new Set(
+      (context.doraIndicators || []).map((indicator) => doraTileFromIndicator(indicator)),
+    );
+    if (accept.drawRed || doraTiles.has(accept.tile)) return "打点増";
+    return "受入増";
+  }
+
+  function showAcceptanceDetail(option, context) {
     closeAcceptanceDetail();
 
     const backdrop = document.createElement("div");
@@ -2831,7 +2841,7 @@
 
         const kind = document.createElement("span");
         kind.className = "acceptance-detail-kind";
-        kind.textContent = accept.shapeImprovement ? "形変化" : "シャンテン改善";
+        kind.textContent = acceptanceDetailKind(accept, context);
         item.append(kind);
         list.append(item);
       }
@@ -2948,7 +2958,7 @@
       acceptanceButton.className = "ukeire-button";
       acceptanceButton.textContent = `${option.totalAcceptance}枚`;
       acceptanceButton.setAttribute("aria-label", `受け入れ詳細 ${option.totalAcceptance}枚`);
-      acceptanceButton.addEventListener("click", () => showAcceptanceDetail(option));
+      acceptanceButton.addEventListener("click", () => showAcceptanceDetail(option, context));
       acceptanceCell.append(acceptanceButton);
       row.append(acceptanceCell);
 
