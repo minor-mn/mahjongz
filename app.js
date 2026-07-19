@@ -92,6 +92,7 @@
   };
 
   let resultRenderToken = 0;
+  let acceptanceDetailLayer = null;
 
   function totalTiles(counts) {
     return counts.reduce((sum, count) => sum + count, 0);
@@ -2758,6 +2759,105 @@
     return `${(value * 100).toFixed(1)}%`;
   }
 
+  function closeAcceptanceDetail() {
+    if (!acceptanceDetailLayer) return;
+
+    const layer = acceptanceDetailLayer;
+    acceptanceDetailLayer = null;
+    layer.classList.remove("open");
+    document.body.classList.remove("drawer-open");
+    window.setTimeout(() => layer.remove(), 260);
+  }
+
+  function showAcceptanceDetail(option) {
+    closeAcceptanceDetail();
+
+    const backdrop = document.createElement("div");
+    backdrop.className = "acceptance-drawer-backdrop";
+    backdrop.setAttribute("aria-label", "受け入れ詳細を閉じる");
+
+    const drawer = document.createElement("section");
+    drawer.className = "acceptance-drawer";
+    drawer.setAttribute("role", "dialog");
+    drawer.setAttribute("aria-modal", "true");
+    drawer.setAttribute("aria-labelledby", "acceptance-drawer-title");
+
+    const handle = document.createElement("div");
+    handle.className = "drawer-handle";
+    handle.setAttribute("aria-hidden", "true");
+    drawer.append(handle);
+
+    const header = document.createElement("div");
+    header.className = "drawer-header";
+
+    const headingWrap = document.createElement("div");
+    const heading = document.createElement("h3");
+    heading.id = "acceptance-drawer-title";
+    heading.textContent = "受け入れ詳細";
+    headingWrap.append(heading);
+
+    const subtitle = document.createElement("p");
+    subtitle.className = "drawer-subtitle";
+    const discard = tileDefinition(option.discard, option.discardRed);
+    subtitle.textContent = `${discard.short}切り / 合計 ${option.totalAcceptance}枚`;
+    headingWrap.append(subtitle);
+    header.append(headingWrap);
+
+    const closeButton = document.createElement("button");
+    closeButton.type = "button";
+    closeButton.className = "drawer-close";
+    closeButton.setAttribute("aria-label", "閉じる");
+    closeButton.textContent = "×";
+    closeButton.addEventListener("click", closeAcceptanceDetail);
+    header.append(closeButton);
+    drawer.append(header);
+
+    const list = document.createElement("div");
+    list.className = "acceptance-detail-list";
+    const accepts = option.accepts
+      .slice()
+      .sort((a, b) => a.tile - b.tile || Number(a.drawRed) - Number(b.drawRed));
+
+    if (!accepts.length) {
+      const empty = document.createElement("p");
+      empty.className = "acceptance-detail-empty";
+      empty.textContent = "受け入れ牌がありません。";
+      list.append(empty);
+    } else {
+      for (const accept of accepts) {
+        const item = document.createElement("div");
+        item.className = "acceptance-detail-item";
+        item.append(createMiniTile(accept.tile, `${accept.remaining}枚`, accept.drawRed));
+
+        const kind = document.createElement("span");
+        kind.className = "acceptance-detail-kind";
+        kind.textContent = accept.shapeImprovement ? "形変化" : "シャンテン改善";
+        item.append(kind);
+        list.append(item);
+      }
+    }
+    drawer.append(list);
+    backdrop.append(drawer);
+
+    backdrop.addEventListener("click", (event) => {
+      if (event.target === backdrop) closeAcceptanceDetail();
+    });
+    backdrop.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeAcceptanceDetail();
+      }
+    });
+
+    document.body.append(backdrop);
+    acceptanceDetailLayer = backdrop;
+    document.body.classList.add("drawer-open");
+    window.requestAnimationFrame(() => {
+      backdrop.classList.add("open");
+      closeButton.focus();
+    });
+  }
+
   function renderExpectedValueResult(result, context) {
     const section = document.createDocumentFragment();
     const current = result.currentShanten;
@@ -2843,7 +2943,13 @@
 
       const acceptanceCell = document.createElement("td");
       acceptanceCell.className = "ukeire-count";
-      acceptanceCell.textContent = `${option.totalAcceptance}枚`;
+      const acceptanceButton = document.createElement("button");
+      acceptanceButton.type = "button";
+      acceptanceButton.className = "ukeire-button";
+      acceptanceButton.textContent = `${option.totalAcceptance}枚`;
+      acceptanceButton.setAttribute("aria-label", `受け入れ詳細 ${option.totalAcceptance}枚`);
+      acceptanceButton.addEventListener("click", () => showAcceptanceDetail(option));
+      acceptanceCell.append(acceptanceButton);
       row.append(acceptanceCell);
 
       const expectedCell = document.createElement("td");
@@ -3063,6 +3169,7 @@
   }
 
   function renderAll({ syncNotation = false } = {}) {
+    closeAcceptanceDetail();
     syncSettingsFromControls();
 
     if (syncNotation) {
