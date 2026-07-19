@@ -2789,7 +2789,6 @@
     const layer = acceptanceDetailLayer;
     acceptanceDetailLayer = null;
     layer.classList.remove("open");
-    document.body.classList.remove("drawer-open");
     window.setTimeout(() => layer.remove(), 260);
   }
 
@@ -2848,9 +2847,15 @@
 
     const list = document.createElement("div");
     list.className = "acceptance-detail-list";
+    const detailOrder = { "向聴減": 0, "受入増": 1, "打点増": 2 };
     const accepts = option.accepts
       .slice()
-      .sort((a, b) => a.tile - b.tile || Number(a.drawRed) - Number(b.drawRed));
+      .sort((a, b) => (
+        detailOrder[acceptanceDetailKind(a, context)]
+        - detailOrder[acceptanceDetailKind(b, context)]
+        || a.tile - b.tile
+        || Number(a.drawRed) - Number(b.drawRed)
+      ));
 
     if (!accepts.length) {
       const empty = document.createElement("p");
@@ -2885,7 +2890,6 @@
 
     document.body.append(backdrop);
     acceptanceDetailLayer = backdrop;
-    document.body.classList.add("drawer-open");
     window.requestAnimationFrame(() => {
       backdrop.classList.add("open");
       closeButton.focus();
