@@ -2094,6 +2094,7 @@
           total: acceptance.total,
           potential: valuePotential(afterDiscard, context, nextRedCounts),
           counts: afterDiscard,
+          redCounts: nextRedCounts,
           unavailableCounts: nextUnavailableCounts,
           unavailableRedCounts: nextUnavailableRedCounts,
         };
@@ -2172,6 +2173,16 @@
         );
         const accepts = strictAcceptance.accepts.slice();
         let totalAcceptance = strictAcceptance.total;
+        const expected = afterInfo.shanten <= maxShanten
+          ? evaluateState(
+            afterDiscard,
+            afterRedCounts,
+            maxDraws,
+            afterInfo.shanten <= currentShanten.shanten,
+            unavailableCounts,
+            unavailableRedCounts,
+          )
+          : emptyExpectedValue();
         const usedCounts = usedCountsForEv(afterDiscard, context, unavailableCounts);
         const usedRedCounts = usedRedCountsForEv(
           afterRedCounts,
@@ -2217,6 +2228,26 @@
               || !tileHasShapeSupport(nextAcceptance.counts, draw)
             ) continue;
 
+            const nextExpected = evaluateState(
+              nextAcceptance.counts,
+              nextAcceptance.redCounts,
+              Math.max(0, maxDraws - 1),
+              false,
+              nextAcceptance.unavailableCounts,
+              nextAcceptance.unavailableRedCounts,
+            );
+            const peakScoreImprovement = nextExpected.peakRoute
+              && (
+                !expected.peakRoute
+                || compareScorePriority(nextExpected.peakRoute, expected.peakRoute) > 0
+              );
+            const expectedAverage = expected.wins > 0
+              ? expected.points / expected.wins
+              : 0;
+            const nextExpectedAverage = nextExpected.wins > 0
+              ? nextExpected.points / nextExpected.wins
+              : 0;
+
             accepts.push({
               tile: draw,
               drawRed: drawVariant.drawRed,
@@ -2224,21 +2255,14 @@
               shanten: drawInfo.shanten,
               shapeImprovement: true,
               nextAcceptance: nextAcceptance.total,
+              scoreImprovement: Boolean(
+                peakScoreImprovement
+                || nextExpectedAverage > expectedAverage + 0.5
+              ),
             });
             totalAcceptance += drawVariant.copies;
           }
         }
-
-        const expected = afterInfo.shanten <= maxShanten
-          ? evaluateState(
-            afterDiscard,
-            afterRedCounts,
-            maxDraws,
-            afterInfo.shanten <= currentShanten.shanten,
-            unavailableCounts,
-            unavailableRedCounts,
-          )
-          : emptyExpectedValue();
 
         options.push({
           discard,
@@ -2775,7 +2799,7 @@
     const doraTiles = new Set(
       (context.doraIndicators || []).map((indicator) => doraTileFromIndicator(indicator)),
     );
-    if (accept.drawRed || doraTiles.has(accept.tile)) return "打点増";
+    if (accept.scoreImprovement || accept.drawRed || doraTiles.has(accept.tile)) return "打点増";
     return "受入増";
   }
 
