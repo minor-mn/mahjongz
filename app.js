@@ -2793,6 +2793,7 @@
   }
 
   function acceptanceDetailKind(accept, context) {
+    if (accept.shanten < 0) return "和了";
     if (!accept.shapeImprovement) return "向聴減";
 
     const doraTiles = new Set(
@@ -2847,7 +2848,7 @@
 
     const list = document.createElement("div");
     list.className = "acceptance-detail-list";
-    const detailOrder = { "向聴減": 0, "受入増": 1, "打点増": 2 };
+    const detailOrder = { "和了": 0, "向聴減": 1, "受入増": 2, "打点増": 3 };
     const accepts = option.accepts
       .slice()
       .sort((a, b) => (
